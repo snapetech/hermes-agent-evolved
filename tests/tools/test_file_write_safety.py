@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from tools.file_operations import _is_write_denied
+from agent.file_safety import get_write_block_error
 
 
 class TestStaticDenyList:
@@ -77,6 +78,38 @@ class TestSafeWriteRoot:
         # Point safe root at home to include ~/.ssh
         monkeypatch.setenv("HERMES_WRITE_SAFE_ROOT", os.path.expanduser("~"))
         assert _is_write_denied(os.path.expanduser("~/.ssh/id_rsa")) is True
+
+
+class TestRepoFirstWritePolicy:
+    """Pod-local legacy repo paths should be read-only when a canonical repo exists."""
+
+    def test_legacy_repo_path_denied_when_canonical_exists(self, tmp_path: Path, monkeypatch):
+        canonical = tmp_path / "workspace" / "hermes-agent-private"
+        legacy = tmp_path / "hermes-agent"
+        target = legacy / "skills" / "putter" / "SKILL.md"
+        canonical.mkdir(parents=True)
+        target.parent.mkdir(parents=True)
+
+        monkeypatch.setenv("HERMES_REPO_SYNC_TARGET", str(canonical))
+        monkeypatch.setenv("HERMES_REPO_SYNC_READ_ONLY_SOURCES", str(legacy))
+
+        assert _is_write_denied(str(target)) is True
+        message = get_write_block_error(str(target))
+        assert message is not None
+        assert str(canonical) in message
+
+    def test_legacy_repo_path_allowed_without_canonical_repo(self, tmp_path: Path, monkeypatch):
+        canonical = tmp_path / "workspace" / "hermes-agent-private"
+        legacy = tmp_path / "hermes-agent"
+        target = legacy / "skills" / "putter" / "SKILL.md"
+        target.parent.mkdir(parents=True)
+
+        monkeypatch.setenv("HERMES_REPO_SYNC_TARGET", str(canonical))
+        monkeypatch.setenv("HERMES_REPO_SYNC_READ_ONLY_SOURCES", str(legacy))
+
+        assert canonical.exists() is False
+        assert _is_write_denied(str(target)) is False
+        assert get_write_block_error(str(target)) is None
 
 
 class TestCheckSensitivePathMacOSBypass:

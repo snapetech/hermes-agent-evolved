@@ -235,9 +235,6 @@ def _scan_workspace_state(source_dir: Path) -> list[tuple[Path, str]]:
     """
     findings: list[tuple[Path, str]] = []
 
-    if not source_dir.exists():
-        return findings
-
     # Direct state files in the root
     for name in ("todo.json", "sessions", "logs"):
         candidate = source_dir / name
@@ -246,12 +243,7 @@ def _scan_workspace_state(source_dir: Path) -> list[tuple[Path, str]]:
             findings.append((candidate, f"Root {kind}: {name}"))
 
     # State files inside workspace directories
-    try:
-        children = sorted(source_dir.iterdir())
-    except OSError:
-        return findings
-
-    for child in children:
+    for child in sorted(source_dir.iterdir()):
         if not child.is_dir() or child.name.startswith("."):
             continue
         # Check for workspace-like subdirectories
@@ -598,7 +590,7 @@ def _cmd_cleanup(args):
 
     # Warn if OpenClaw is still running — archiving while the service is
     # active causes it to recreate an empty skeleton directory (#8502).
-    running = _detect_openclaw_processes()
+    running = [] if dry_run else _detect_openclaw_processes()
     if running:
         print()
         print_error("OpenClaw appears to be still running:")
@@ -615,7 +607,7 @@ def _cmd_cleanup(args):
                 print_info("Non-interactive session — aborting. Stop OpenClaw and re-run.")
                 return
             if not prompt_yes_no("Proceed anyway?", default=False):
-                print_info("Aborted. Stop OpenClaw first, then re-run: hermes claw cleanup")
+                print_info("Skipped. Stop OpenClaw first, then re-run: hermes claw cleanup")
                 return
 
     total_archived = 0

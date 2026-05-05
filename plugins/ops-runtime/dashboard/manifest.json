@@ -1,0 +1,13 @@
+{
+  "name": "ops-runtime",
+  "label": "Ops Runtime",
+  "description": "Operational status for Hermes gateway, Kubernetes, model backend, and runtime boundaries.",
+  "icon": "Activity",
+  "version": "1.0.0",
+  "tab": {
+    "path": "/ops-runtime",
+    "position": "after:sessions"
+  },
+  "entry": "dist/index.js",
+  "api": "plugin_api.py"
+}

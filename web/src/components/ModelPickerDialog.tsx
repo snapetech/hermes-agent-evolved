@@ -1,6 +1,4 @@
-import { Button } from "@nous-research/ui/ui/components/button";
-import { ListItem } from "@nous-research/ui/ui/components/list-item";
-import { Spinner } from "@nous-research/ui/ui/components/spinner";
+import { Button, ListItem, Spinner } from "@nous-research/ui";
 import { Input } from "@/components/ui/input";
 import type { GatewayClient } from "@/lib/gatewayClient";
 import { Check, Search, X } from "lucide-react";
@@ -13,18 +11,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
  *   Stage 1: pick provider (authenticated providers only)
  *   Stage 2: pick model within that provider
  *
- * Two invocation modes:
- *
- * 1. Chat-session mode (ChatSidebar) — pass `gw` + `sessionId`. The picker
- *    loads options via `model.options` JSON-RPC and emits the result as a
- *    slash command string (`/model <model> --provider <slug> [--global]`)
- *    through `onSubmit`, which the ChatPage pipes to `slashExec`.
- *
- * 2. Standalone mode (ModelsPage, Config settings) — pass a `loader` and
- *    `onApply`. The picker fetches options via the REST endpoint and calls
- *    `onApply(provider, model, persistGlobal)` instead of emitting a slash
- *    command.  This lets the Models page reuse the same UI without
- *    requiring an open chat PTY.
+ * On confirm, emits `/model <model> --provider <slug> [--global]` through
+ * the parent callback so ChatPage can dispatch it via the existing slash
+ * pipeline. That keeps persistence + actual switch logic in one place.
  */
 
 interface ModelOptionProvider {
@@ -43,38 +32,14 @@ interface ModelOptionsResponse {
 }
 
 interface Props {
-  /** Chat-mode: when present, picker emits a slash command via onSubmit. */
-  gw?: GatewayClient;
-  sessionId?: string;
-  onSubmit?(slashCommand: string): void;
-
-  /** Standalone-mode: when present (and onSubmit absent), picker calls onApply. */
-  loader?(): Promise<ModelOptionsResponse>;
-  onApply?(args: {
-    provider: string;
-    model: string;
-    persistGlobal: boolean;
-  }): Promise<void> | void;
-
+  gw: GatewayClient;
+  sessionId: string;
   onClose(): void;
-  title?: string;
-  /** If true, hides "Persist globally" checkbox — always saves to config.yaml. */
-  alwaysGlobal?: boolean;
+  /** Parent runs the resulting slash command through slashExec. */
+  onSubmit(slashCommand: string): void;
 }
 
-export function ModelPickerDialog(props: Props) {
-  const {
-    gw,
-    sessionId,
-    onSubmit,
-    loader,
-    onApply,
-    onClose,
-    title = "Switch Model",
-    alwaysGlobal = false,
-  } = props;
-  const standalone = !!loader && !!onApply;
-
+export function ModelPickerDialog({ gw, sessionId, onClose, onSubmit }: Props) {
   const [providers, setProviders] = useState<ModelOptionProvider[]>([]);
   const [currentModel, setCurrentModel] = useState("");
   const [currentProviderSlug, setCurrentProviderSlug] = useState("");
@@ -83,22 +48,17 @@ export function ModelPickerDialog(props: Props) {
   const [selectedSlug, setSelectedSlug] = useState("");
   const [selectedModel, setSelectedModel] = useState("");
   const [query, setQuery] = useState("");
-  const [persistGlobal, setPersistGlobal] = useState(alwaysGlobal);
-  const [applying, setApplying] = useState(false);
+  const [persistGlobal, setPersistGlobal] = useState(false);
   const closedRef = useRef(false);
 
   // Load providers + models on open.
   useEffect(() => {
     closedRef.current = false;
 
-    const promise = standalone
-      ? (loader as () => Promise<ModelOptionsResponse>)()
-      : (gw as GatewayClient).request<ModelOptionsResponse>(
-          "model.options",
-          sessionId ? { session_id: sessionId } : {},
-        );
-
-    promise
+    gw.request<ModelOptionsResponse>(
+      "model.options",
+      sessionId ? { session_id: sessionId } : {},
+    )
       .then((r) => {
         if (closedRef.current) return;
         const next = r?.providers ?? [];
@@ -120,9 +80,7 @@ export function ModelPickerDialog(props: Props) {
     return () => {
       closedRef.current = true;
     };
-    // Deliberately omit props from deps — stable for the dialog's lifetime.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [gw, sessionId]);
 
   // Esc closes.
   useEffect(() => {
@@ -167,31 +125,15 @@ export function ModelPickerDialog(props: Props) {
     [models, needle],
   );
 
-  const canConfirm = !!selectedProvider && !!selectedModel && !applying;
+  const canConfirm = !!selectedProvider && !!selectedModel;
 
-  const confirm = async () => {
-    if (!canConfirm || !selectedProvider) return;
-    if (standalone && onApply) {
-      setApplying(true);
-      try {
-        await onApply({
-          provider: selectedProvider.slug,
-          model: selectedModel,
-          persistGlobal,
-        });
-        onClose();
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-      } finally {
-        setApplying(false);
-      }
-    } else if (onSubmit) {
-      const global = persistGlobal ? " --global" : "";
-      onSubmit(
-        `/model ${selectedModel} --provider ${selectedProvider.slug}${global}`,
-      );
-      onClose();
-    }
+  const confirm = () => {
+    if (!canConfirm) return;
+    const global = persistGlobal ? " --global" : "";
+    onSubmit(
+      `/model ${selectedModel} --provider ${selectedProvider.slug}${global}`,
+    );
+    onClose();
   };
 
   return (
@@ -218,7 +160,7 @@ export function ModelPickerDialog(props: Props) {
             id="model-picker-title"
             className="font-display text-base tracking-wider uppercase"
           >
-            {title}
+            Switch Model
           </h2>
           <p className="text-xs text-muted-foreground mt-1 font-mono">
             current: {currentModel || "(unknown)"}
@@ -270,28 +212,22 @@ export function ModelPickerDialog(props: Props) {
         </div>
 
         <footer className="border-t border-border p-3 flex items-center justify-between gap-3 flex-wrap">
-          {alwaysGlobal ? (
-            <span className="text-xs text-muted-foreground">
-              Saves to config.yaml — applies to new sessions.
-            </span>
-          ) : (
-            <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={persistGlobal}
-                onChange={(e) => setPersistGlobal(e.target.checked)}
-                className="cursor-pointer"
-              />
-              Persist globally (otherwise this session only)
-            </label>
-          )}
+          <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={persistGlobal}
+              onChange={(e) => setPersistGlobal(e.target.checked)}
+              className="cursor-pointer"
+            />
+            Persist globally (otherwise this session only)
+          </label>
 
           <div className="flex items-center gap-2 ml-auto">
-            <Button outlined onClick={onClose} disabled={applying}>
+            <Button outlined onClick={onClose}>
               Cancel
             </Button>
             <Button onClick={confirm} disabled={!canConfirm}>
-              {applying ? <Spinner /> : "Switch"}
+              Switch
             </Button>
           </div>
         </footer>

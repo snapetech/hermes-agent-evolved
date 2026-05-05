@@ -88,29 +88,24 @@ class TestMessageHandler:
         from mcp.types import ServerNotification, ToolListChangedNotification
 
         server = MCPServerTask("notif_srv")
-        # Product now schedules the refresh as a background task (see
-        # _schedule_tools_refresh in mcp_tool.py ~L918) rather than awaiting
-        # it directly, to avoid wedging the stdio JSON-RPC stream. Patch at
-        # the scheduler seam so we can still assert dispatch happened without
-        # reaching into asyncio.create_task internals.
-        with patch.object(MCPServerTask, "_schedule_tools_refresh") as mock_schedule:
+        with patch.object(MCPServerTask, "_refresh_tools", new_callable=AsyncMock) as mock_refresh:
             handler = server._make_message_handler()
             notification = ServerNotification(
                 root=ToolListChangedNotification(method="notifications/tools/list_changed")
             )
             await handler(notification)
-            mock_schedule.assert_called_once()
+            mock_refresh.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_ignores_exceptions_and_other_messages(self):
         server = MCPServerTask("notif_srv")
-        with patch.object(MCPServerTask, "_schedule_tools_refresh") as mock_schedule:
+        with patch.object(MCPServerTask, "_refresh_tools", new_callable=AsyncMock) as mock_refresh:
             handler = server._make_message_handler()
             # Exceptions should not trigger refresh
             await handler(RuntimeError("connection dead"))
             # Unknown message types should not trigger refresh
             await handler({"jsonrpc": "2.0", "result": "ok"})
-            mock_schedule.assert_not_called()
+            mock_refresh.assert_not_awaited()
 
 
 class TestDeregister:

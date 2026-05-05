@@ -68,7 +68,6 @@ from pathlib import Path
 from agent.auxiliary_client import call_llm
 from hermes_constants import get_hermes_home
 from utils import is_truthy_value
-from hermes_cli.config import cfg_get
 
 try:
     from tools.website_policy import check_website_access
@@ -193,7 +192,7 @@ def _get_command_timeout() -> int:
     try:
         from hermes_cli.config import read_raw_config
         cfg = read_raw_config()
-        val = cfg_get(cfg, "browser", "command_timeout")
+        val = cfg.get("browser", {}).get("command_timeout")
         if val is not None:
             result = max(int(val), 5)  # Floor at 5s to avoid instant kills
     except Exception as e:
@@ -1482,34 +1481,6 @@ def _run_browser_command(
         if "AGENT_BROWSER_IDLE_TIMEOUT_MS" not in browser_env:
             idle_ms = str(BROWSER_SESSION_INACTIVITY_TIMEOUT * 1000)
             browser_env["AGENT_BROWSER_IDLE_TIMEOUT_MS"] = idle_ms
-
-        # Inject --no-sandbox when needed (issue #15765):
-        # - Running as root: Chromium always refuses to start without it
-        # - Ubuntu 23.10+ / AppArmor systems: unprivileged user namespaces
-        #   are restricted, causing Chromium to exit with "No usable sandbox"
-        #   even for non-root users running under systemd or containers.
-        if "AGENT_BROWSER_CHROME_FLAGS" not in browser_env:
-            _needs_sandbox_bypass = False
-            if hasattr(os, "geteuid") and os.geteuid() == 0:
-                _needs_sandbox_bypass = True
-                logger.debug("browser: running as root — injecting --no-sandbox")
-            else:
-                # Detect AppArmor user namespace restrictions (Ubuntu 23.10+)
-                _userns_restrict = "/proc/sys/kernel/apparmor_restrict_unprivileged_userns"
-                try:
-                    with open(_userns_restrict) as _f:
-                        if _f.read().strip() == "1":
-                            _needs_sandbox_bypass = True
-                            logger.debug(
-                                "browser: AppArmor userns restrictions detected — "
-                                "injecting --no-sandbox"
-                            )
-                except OSError:
-                    pass
-            if _needs_sandbox_bypass:
-                browser_env["AGENT_BROWSER_CHROME_FLAGS"] = (
-                    "--no-sandbox --disable-dev-shm-usage"
-                )
         
         # Use temp files for stdout/stderr instead of pipes.
         # agent-browser starts a background daemon that inherits file
@@ -2274,7 +2245,7 @@ def _maybe_start_recording(task_id: str):
         from hermes_cli.config import read_raw_config
         hermes_home = get_hermes_home()
         cfg = read_raw_config()
-        record_enabled = cfg_get(cfg, "browser", "record_sessions", default=False)
+        record_enabled = cfg.get("browser", {}).get("record_sessions", False)
         
         if not record_enabled:
             return
@@ -2477,7 +2448,7 @@ def browser_vision(question: str, annotate: bool = False, task_id: Optional[str]
         try:
             from hermes_cli.config import load_config
             _cfg = load_config()
-            _vision_cfg = cfg_get(_cfg, "auxiliary", "vision", default={})
+            _vision_cfg = _cfg.get("auxiliary", {}).get("vision", {})
             _vt = _vision_cfg.get("timeout")
             if _vt is not None:
                 vision_timeout = float(_vt)
@@ -2785,40 +2756,17 @@ def _chromium_search_roots() -> List[str]:
 def _chromium_installed() -> bool:
     """Return True when a usable Chromium (or headless-shell) build is on disk.
 
-    Checks, in order:
-
-    1. ``AGENT_BROWSER_EXECUTABLE_PATH`` env var — the official way to point
-       agent-browser at a pre-installed Chrome/Chromium.
-    2. System Chrome/Chromium in PATH (``google-chrome``, ``chromium-browser``,
-       ``chrome``).
-    3. Playwright's browser cache (current logic) — directories containing
-       ``chromium-*`` or ``chromium_headless_shell-*``.
-
     agent-browser (0.26+) downloads Playwright's chromium / headless-shell
-    builds into ``PLAYWRIGHT_BROWSERS_PATH`` and won't start without at least
-    one of the three above being present.  Without a browser binary the CLI
-    hangs on first use until the command timeout fires (often ~30s).  Guarding
-    the tool behind this check prevents advertising a capability that will
-    fail at runtime.
+    builds into ``PLAYWRIGHT_BROWSERS_PATH`` and won't start without them.
+    When the CLI is present but no browser build is, the first browser tool
+    call hangs for the full command timeout (often ~30s each) before
+    surfacing a useless error. Guarding the tool behind this check prevents
+    advertising a capability that will fail at runtime.
     """
     global _cached_chromium_installed
     if _cached_chromium_installed is not None:
         return _cached_chromium_installed
 
-    # 1. AGENT_BROWSER_EXECUTABLE_PATH — explicit user-configured browser
-    ab_path = os.environ.get("AGENT_BROWSER_EXECUTABLE_PATH", "").strip()
-    if ab_path:
-        if os.path.isfile(ab_path) or shutil.which(ab_path):
-            _cached_chromium_installed = True
-            return True
-
-    # 2. System Chrome/Chromium in PATH (common names)
-    system_chrome = shutil.which("google-chrome") or shutil.which("chromium-browser") or shutil.which("chrome")
-    if system_chrome:
-        _cached_chromium_installed = True
-        return True
-
-    # 3. Playwright browser cache (legacy — chromium-* / chromium_headless_shell-* dirs)
     for root in _chromium_search_roots():
         if not root or not os.path.isdir(root):
             continue
@@ -2868,12 +2816,7 @@ def check_browser_requirements() -> bool:
     if _is_camofox_mode():
         return True
 
-    # CDP override mode can connect to an existing remote/local browser endpoint
-    # without requiring the local agent-browser binary on PATH.
-    if _get_cdp_override():
-        return True
-
-    # The agent-browser CLI is required for local launch and cloud-provider flows.
+    # The agent-browser CLI is always required
     try:
         browser_cmd = _find_agent_browser()
     except FileNotFoundError:

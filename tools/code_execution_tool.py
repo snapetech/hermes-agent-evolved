@@ -73,24 +73,7 @@ MAX_STDERR_BYTES = 10_000    # 10 KB
 
 def check_sandbox_requirements() -> bool:
     """Code execution sandbox requires a POSIX OS for Unix domain sockets."""
-    if not SANDBOX_AVAILABLE:
-        return False
-
-    try:
-        from tools.terminal_tool import (
-            _check_vercel_sandbox_requirements,
-            _get_env_config,
-        )
-
-        config = _get_env_config()
-    except Exception:
-        logger.debug("Could not resolve terminal config for execute_code availability", exc_info=True)
-        return False
-
-    if config.get("env_type") == "vercel_sandbox":
-        return _check_vercel_sandbox_requirements(config)
-
-    return True
+    return SANDBOX_AVAILABLE
 
 
 # ---------------------------------------------------------------------------
@@ -224,14 +207,9 @@ def retry(fn, max_attempts=3, delay=2):
 
 _UDS_TRANSPORT_HEADER = '''\
 """Auto-generated Hermes tools RPC stubs."""
-import json, os, socket, shlex, threading, time
+import json, os, socket, shlex, time
 
 _sock = None
-# The RPC server handles a single client connection serially and has no
-# request-id in the protocol, so concurrent _call() invocations from multiple
-# threads (e.g. ThreadPoolExecutor) would race on the shared socket and get
-# each other's responses. Serialize the entire send+recv round-trip.
-_call_lock = threading.Lock()
 ''' + _COMMON_HELPERS + '''\
 
 def _connect():
@@ -244,18 +222,17 @@ def _connect():
 
 def _call(tool_name, args):
     """Send a tool call to the parent process and return the parsed result."""
+    conn = _connect()
     request = json.dumps({"tool": tool_name, "args": args}) + "\\n"
-    with _call_lock:
-        conn = _connect()
-        conn.sendall(request.encode())
-        buf = b""
-        while True:
-            chunk = conn.recv(65536)
-            if not chunk:
-                raise RuntimeError("Agent process disconnected")
-            buf += chunk
-            if buf.endswith(b"\\n"):
-                break
+    conn.sendall(request.encode())
+    buf = b""
+    while True:
+        chunk = conn.recv(65536)
+        if not chunk:
+            raise RuntimeError("Agent process disconnected")
+        buf += chunk
+        if buf.endswith(b"\\n"):
+            break
     raw = buf.decode().strip()
     result = json.loads(raw)
     if isinstance(result, str):
@@ -271,30 +248,24 @@ def _call(tool_name, args):
 
 _FILE_TRANSPORT_HEADER = '''\
 """Auto-generated Hermes tools RPC stubs (file-based transport)."""
-import json, os, shlex, tempfile, threading, time
+import json, os, shlex, tempfile, time
 
 _RPC_DIR = os.environ.get("HERMES_RPC_DIR") or os.path.join(tempfile.gettempdir(), "hermes_rpc")
 _seq = 0
-# `_seq += 1` is not atomic (read-modify-write), so concurrent _call()
-# invocations from multiple threads could allocate the same sequence number
-# and clobber each other's request files. Guard seq allocation with a lock.
-_seq_lock = threading.Lock()
 ''' + _COMMON_HELPERS + '''\
 
 def _call(tool_name, args):
     """Send a tool call request via file-based RPC and wait for response."""
     global _seq
-    with _seq_lock:
-        _seq += 1
-        seq = _seq
-    seq_str = f"{seq:06d}"
+    _seq += 1
+    seq_str = f"{_seq:06d}"
     req_file = os.path.join(_RPC_DIR, f"req_{seq_str}")
     res_file = os.path.join(_RPC_DIR, f"res_{seq_str}")
 
     # Write request atomically (write to .tmp, then rename)
     tmp = req_file + ".tmp"
     with open(tmp, "w") as f:
-        json.dump({"tool": tool_name, "args": args, "seq": seq}, f)
+        json.dump({"tool": tool_name, "args": args, "seq": _seq}, f)
     os.rename(tmp, req_file)
 
     # Wait for response with adaptive polling
@@ -510,15 +481,13 @@ def _get_or_create_env(task_id: str):
         cwd = overrides.get("cwd") or config["cwd"]
 
         container_config = None
-        if env_type in ("docker", "singularity", "modal", "daytona", "vercel_sandbox"):
+        if env_type in ("docker", "singularity", "modal", "daytona"):
             container_config = {
                 "container_cpu": config.get("container_cpu", 1),
                 "container_memory": config.get("container_memory", 5120),
                 "container_disk": config.get("container_disk", 51200),
                 "container_persistent": config.get("container_persistent", True),
-                "vercel_runtime": config.get("vercel_runtime", ""),
                 "docker_volumes": config.get("docker_volumes", []),
-                "docker_run_as_host_user": config.get("docker_run_as_host_user", False),
             }
 
         ssh_config = None
@@ -1340,20 +1309,10 @@ def _kill_process_group(proc, escalate: bool = False):
 
 
 def _load_config() -> dict:
-    """Load code_execution config without importing the interactive CLI.
-
-    This helper is called while building the module-level execute_code schema
-    during tool discovery.  Importing ``cli`` here pulls prompt_toolkit/Rich and
-    a large chunk of the classic REPL onto every agent startup path, including
-    ``hermes --tui`` where it is never used.  Read the lightweight raw config
-    instead; the config layer already caches by (mtime, size), and an absent
-    key cleanly falls back to DEFAULT_EXECUTION_MODE.
-    """
+    """Load code_execution config from CLI_CONFIG if available."""
     try:
-        from hermes_cli.config import read_raw_config
-
-        cfg = read_raw_config().get("code_execution", {})
-        return cfg if isinstance(cfg, dict) else {}
+        from cli import CLI_CONFIG
+        return CLI_CONFIG.get("code_execution", {})
     except Exception:
         return {}
 

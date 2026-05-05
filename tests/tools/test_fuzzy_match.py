@@ -328,4 +328,3 @@ class TestFormatNoMatchHint:
             0, "totally_unique_xyzzy_qux", "abc\nxyz\n",
         )
         assert result == ""
-

@@ -40,7 +40,6 @@ OPENROUTER_MODELS: list[tuple[str, str]] = [
     ("anthropic/claude-sonnet-4.5",     ""),
     ("anthropic/claude-haiku-4.5",      ""),
     ("openrouter/elephant-alpha",       "free"),
-    ("openrouter/owl-alpha",            "free"),
     ("openai/gpt-5.5",                  ""),
     ("openai/gpt-5.4-mini",             ""),
     ("xiaomi/mimo-v2.5-pro",             ""),
@@ -289,10 +288,6 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "MiniMax-M2.1",
         "MiniMax-M2",
     ],
-    "minimax-oauth": [
-        "MiniMax-M2.7",
-        "MiniMax-M2.7-highspeed",
-    ],
     "minimax-cn": [
         "MiniMax-M2.7",
         "MiniMax-M2.5",
@@ -389,7 +384,13 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "qwen3.6-plus",
         "qwen3.5-plus",
     ],
+    "manifest": [
+        "manifest/auto",
+    ],
     "kilocode": [
+        "kilo-auto/free",
+        "moonshotai/kimi-k2.6",
+        "moonshotai/kimi-k2.5",
         "anthropic/claude-opus-4.6",
         "anthropic/claude-sonnet-4.6",
         "openai/gpt-5.4",
@@ -774,13 +775,14 @@ CANONICAL_PROVIDERS: list[ProviderEntry] = [
     ProviderEntry("nous",           "Nous Portal",              "Nous Portal (Nous Research subscription)"),
     ProviderEntry("openrouter",     "OpenRouter",               "OpenRouter (100+ models, pay-per-use)"),
     ProviderEntry("lmstudio",       "LM Studio",                "LM Studio (local desktop app with built-in model server)"),
+    ProviderEntry("ai-gateway",     "Vercel AI Gateway",        "Vercel AI Gateway (200+ models, $5 free credit, no markup)"),
     ProviderEntry("anthropic",      "Anthropic",                "Anthropic (Claude models — API key or Claude Code)"),
     ProviderEntry("openai-codex",   "OpenAI Codex",             "OpenAI Codex"),
     ProviderEntry("xiaomi",         "Xiaomi MiMo",              "Xiaomi MiMo (MiMo-V2.5 and V2 models — pro, omni, flash)"),
     ProviderEntry("tencent-tokenhub", "Tencent TokenHub",       "Tencent TokenHub (Hy3 Preview — direct API via tokenhub.tencentmaas.com)"),
     ProviderEntry("nvidia",         "NVIDIA NIM",               "NVIDIA NIM (Nemotron models — build.nvidia.com or local NIM)"),
     ProviderEntry("qwen-oauth",     "Qwen OAuth (Portal)",      "Qwen OAuth (reuses local Qwen CLI login)"),
-    ProviderEntry("copilot",        "GitHub Copilot",           "GitHub Copilot (uses GITHUB_TOKEN or gh auth token)"),
+    ProviderEntry("copilot",        "GitHub Copilot",           "GitHub Copilot (uses COPILOT_GITHUB_TOKEN or gh OAuth token)"),
     ProviderEntry("copilot-acp",    "GitHub Copilot ACP",       "GitHub Copilot ACP (spawns `copilot --acp --stdio`)"),
     ProviderEntry("huggingface",    "Hugging Face",             "Hugging Face Inference Providers (20+ open models)"),
     ProviderEntry("gemini",         "Google AI Studio",         "Google AI Studio (Gemini models — native Gemini API)"),
@@ -792,7 +794,6 @@ CANONICAL_PROVIDERS: list[ProviderEntry] = [
     ProviderEntry("kimi-coding-cn", "Kimi / Moonshot (China)",  "Kimi / Moonshot China (Moonshot CN direct API)"),
     ProviderEntry("stepfun",        "StepFun Step Plan",       "StepFun Step Plan (agent/coding models via Step Plan API)"),
     ProviderEntry("minimax",        "MiniMax",                  "MiniMax (global direct API)"),
-    ProviderEntry("minimax-oauth",  "MiniMax (OAuth)",          "MiniMax via OAuth browser login (Coding Plan, minimax.io)"),
     ProviderEntry("minimax-cn",     "MiniMax (China)",          "MiniMax China (domestic direct API)"),
     ProviderEntry("alibaba",        "Alibaba Cloud (DashScope)","Alibaba Cloud / DashScope Coding (Qwen + multi-provider)"),
     ProviderEntry("ollama-cloud",   "Ollama Cloud",             "Ollama Cloud (cloud-hosted open models — ollama.com)"),
@@ -801,9 +802,10 @@ CANONICAL_PROVIDERS: list[ProviderEntry] = [
     ProviderEntry("kilocode",       "Kilo Code",                "Kilo Code (Kilo Gateway API)"),
     ProviderEntry("opencode-zen",   "OpenCode Zen",             "OpenCode Zen (35+ curated models, pay-as-you-go)"),
     ProviderEntry("opencode-go",    "OpenCode Go",              "OpenCode Go (open models, $10/month subscription)"),
+    ProviderEntry("ai-gateway",     "Vercel AI Gateway",        "Vercel AI Gateway (200+ models, pay-per-use)"),
+    ProviderEntry("manifest",       "Manifest",                 "Manifest (self-hosted/cloud model routing and cost dashboard)"),
     ProviderEntry("bedrock",        "AWS Bedrock",              "AWS Bedrock (Claude, Nova, Llama, DeepSeek — IAM or API key)"),
     ProviderEntry("azure-foundry",  "Azure Foundry",            "Azure Foundry (OpenAI-style or Anthropic-style endpoint — your Azure AI deployment)"),
-    ProviderEntry("ai-gateway",     "Vercel AI Gateway",        "Vercel AI Gateway"),
 ]
 
 # Derived dicts — used throughout the codebase
@@ -837,9 +839,6 @@ _PROVIDER_ALIASES = {
     "gmicloud": "gmi",
     "minimax-china": "minimax-cn",
     "minimax_cn": "minimax-cn",
-    "minimax-portal": "minimax-oauth",
-    "minimax-global": "minimax-oauth",
-    "minimax_oauth": "minimax-oauth",
     "claude": "anthropic",
     "claude-code": "anthropic",
     "deep-seek": "deepseek",
@@ -850,6 +849,9 @@ _PROVIDER_ALIASES = {
     "aigateway": "ai-gateway",
     "vercel": "ai-gateway",
     "vercel-ai-gateway": "ai-gateway",
+    "mnfst": "manifest",
+    "manifest-build": "manifest",
+    "manifest.build": "manifest",
     "kilo": "kilocode",
     "kilo-code": "kilocode",
     "kilo-gateway": "kilocode",
@@ -1740,20 +1742,10 @@ def model_supports_fast_mode(model_id: Optional[str]) -> bool:
 
 
 def _is_anthropic_fast_model(model_id: Optional[str]) -> bool:
-    """Return True if the model is a Claude model eligible for Anthropic Fast Mode.
-
-    Fast mode is currently supported on Claude Opus 4.6 only. Per Anthropic's
-    docs (https://platform.claude.com/docs/en/build-with-claude/fast-mode):
-    "Fast mode is currently supported on Opus 4.6 only. Sending speed: fast
-    with an unsupported model returns an error." Opus 4.7 explicitly rejects
-    the ``speed`` parameter with HTTP 400.
-    """
+    """Return True if the model is a Claude model eligible for Anthropic Fast Mode."""
     raw = _strip_vendor_prefix(str(model_id or ""))
     base = raw.split(":")[0]
-    if not base.startswith("claude-"):
-        return False
-    # Only Opus 4.6 supports fast mode at present.
-    return "opus-4-6" in base or "opus-4.6" in base
+    return base.startswith("claude-")
 
 
 def resolve_fast_mode_overrides(model_id: Optional[str]) -> dict[str, Any] | None:
@@ -1850,7 +1842,6 @@ _MODELS_DEV_PREFERRED: frozenset[str] = frozenset({
     "opencode-go",
     "opencode-zen",
     "deepseek",
-    "kilocode",
     "fireworks",
     "mistral",
     "togetherai",
@@ -2045,56 +2036,28 @@ def _fetch_anthropic_models(timeout: float = 5.0) -> Optional[list[str]]:
         return None
 
     headers: dict[str, str] = {"anthropic-version": "2023-06-01"}
-    is_oauth = _is_oauth_token(token)
-    if is_oauth:
+    if _is_oauth_token(token):
         headers["Authorization"] = f"Bearer {token}"
-        from agent.anthropic_adapter import _COMMON_BETAS, _OAUTH_ONLY_BETAS, _CONTEXT_1M_BETA
+        from agent.anthropic_adapter import _COMMON_BETAS, _OAUTH_ONLY_BETAS
         headers["anthropic-beta"] = ",".join(_COMMON_BETAS + _OAUTH_ONLY_BETAS)
     else:
         headers["x-api-key"] = token
 
-    def _do_request(h: dict[str, str]):
-        req = urllib.request.Request(
-            "https://api.anthropic.com/v1/models",
-            headers=h,
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode())
-
+    req = urllib.request.Request(
+        "https://api.anthropic.com/v1/models",
+        headers=headers,
+    )
     try:
-        try:
-            data = _do_request(headers)
-        except urllib.error.HTTPError as http_err:
-            # Reactive recovery for OAuth subscriptions that reject the 1M
-            # context beta with 400 "long context beta is not yet available
-            # for this subscription". Retry once without the beta; re-raise
-            # anything else so the outer except logs it.
-            if (
-                is_oauth
-                and http_err.code == 400
-            ):
-                try:
-                    body_text = http_err.read().decode(errors="ignore").lower()
-                except Exception:
-                    body_text = ""
-                if "long context beta" in body_text and "not yet available" in body_text:
-                    headers["anthropic-beta"] = ",".join(
-                        [b for b in _COMMON_BETAS if b != _CONTEXT_1M_BETA]
-                        + list(_OAUTH_ONLY_BETAS)
-                    )
-                    data = _do_request(headers)
-                else:
-                    raise
-            else:
-                raise
-        models = [m["id"] for m in data.get("data", []) if m.get("id")]
-        # Sort: latest/largest first (opus > sonnet > haiku, higher version first)
-        return sorted(models, key=lambda m: (
-            "opus" not in m,      # opus first
-            "sonnet" not in m,    # then sonnet
-            "haiku" not in m,     # then haiku
-            m,                    # alphabetical within tier
-        ))
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode())
+            models = [m["id"] for m in data.get("data", []) if m.get("id")]
+            # Sort: latest/largest first (opus > sonnet > haiku, higher version first)
+            return sorted(models, key=lambda m: (
+                "opus" not in m,      # opus first
+                "sonnet" not in m,    # then sonnet
+                "haiku" not in m,     # then haiku
+                m,                    # alphabetical within tier
+            ))
     except Exception as e:
         import logging
         logging.getLogger(__name__).debug("Failed to fetch Anthropic models: %s", e)
@@ -2906,19 +2869,6 @@ def fetch_api_models(
 _OLLAMA_CLOUD_CACHE_TTL = 3600  # 1 hour
 
 
-def _strip_ollama_cloud_suffix(model_id: str) -> str:
-    """Strip :cloud / -cloud suffixes that models.dev appends to Ollama Cloud IDs.
-
-    The live API uses clean IDs (e.g. 'kimi-k2.6') while models.dev sometimes
-    returns them as 'kimi-k2.6:cloud'. Normalising before the dedup merge
-    prevents duplicate entries in the merged model list.
-    """
-    for suffix in (":cloud", "-cloud"):
-        if model_id.endswith(suffix):
-            return model_id[: -len(suffix)]
-    return model_id
-
-
 def _ollama_cloud_cache_path() -> Path:
     """Return the path for the Ollama Cloud model cache."""
     from hermes_constants import get_hermes_home
@@ -3014,10 +2964,9 @@ def fetch_ollama_cloud_models(
                 seen.add(m)
                 merged.append(m)
         for m in mdev_models:
-            normalized = _strip_ollama_cloud_suffix(m)
-            if normalized and normalized not in seen:
-                seen.add(normalized)
-                merged.append(normalized)
+            if m and m not in seen:
+                seen.add(m)
+                merged.append(m)
         if merged:
             _save_ollama_cloud_cache(merged)
             return merged
@@ -3111,7 +3060,7 @@ def validate_requested_model(
             "message": f"Model `{requested}` was not found in LM Studio's model listing.",
         }
 
-    if normalized == "custom" or normalized.startswith("custom:"):
+    if normalized == "custom":
         # Try probing with correct auth for the api_mode.
         if api_mode == "anthropic_messages":
             probe = probe_api_models(api_key, base_url, api_mode=api_mode)
@@ -3209,14 +3158,25 @@ def validate_requested_model(
             if suggestions:
                 suggestion_text = "\n  Similar models: " + ", ".join(f"`{s}`" for s in suggestions)
             return {
-                "accepted": True,
-                "persist": True,
+                "accepted": False,
+                "persist": False,
                 "recognized": False,
                 "message": (
-                    f"Note: `{requested}` was not found in the OpenAI Codex model listing. "
-                    "It may still work if your ChatGPT/Codex account has access to a newer or hidden model ID."
+                    f"Model `{requested}` was not found in the OpenAI Codex model listing."
                     f"{suggestion_text}"
                 ),
+            }
+
+    # Manifest's proxy model is virtual and may not appear in /v1/models.
+    # Validate it against the first-class provider catalog instead of probing.
+    if normalized == "manifest":
+        manifest_models = provider_model_ids("manifest")
+        if requested_for_lookup in set(manifest_models):
+            return {
+                "accepted": True,
+                "persist": True,
+                "recognized": True,
+                "message": None,
             }
 
     # MiniMax providers don't expose a /models endpoint — validate against

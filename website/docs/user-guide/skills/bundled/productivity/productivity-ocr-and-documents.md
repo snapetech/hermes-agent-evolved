@@ -1,14 +1,14 @@
 ---
-title: "Ocr And Documents — Extract text from PDFs/scans (pymupdf, marker-pdf)"
+title: "Ocr And Documents — Extract text from PDFs and scanned documents"
 sidebar_label: "Ocr And Documents"
-description: "Extract text from PDFs/scans (pymupdf, marker-pdf)"
+description: "Extract text from PDFs and scanned documents"
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
 # Ocr And Documents
 
-Extract text from PDFs/scans (pymupdf, marker-pdf).
+Extract text from PDFs and scanned documents. Use web_extract for remote URLs, pymupdf for local text-based PDFs, marker-pdf for OCR/scanned docs. For DOCX use python-docx, for PPTX see the powerpoint skill.
 
 ## Skill metadata
 

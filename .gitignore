@@ -1,5 +1,6 @@
 .DS_Store
 /venv/
+/venv
 /_pycache/
 *.pyc*
 __pycache__/
@@ -50,6 +51,7 @@ cli-config.yaml
 skills/.hub/
 ignored/
 .worktrees/
+tinker-atropos/
 environments/benchmarks/evals/
 
 # Web UI build output

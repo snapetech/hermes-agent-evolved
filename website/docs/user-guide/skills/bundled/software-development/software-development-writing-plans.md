@@ -1,14 +1,14 @@
 ---
-title: "Writing Plans — Write implementation plans: bite-sized tasks, paths, code"
+title: "Writing Plans — Use when you have a spec or requirements for a multi-step task"
 sidebar_label: "Writing Plans"
-description: "Write implementation plans: bite-sized tasks, paths, code"
+description: "Use when you have a spec or requirements for a multi-step task"
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
 # Writing Plans
 
-Write implementation plans: bite-sized tasks, paths, code.
+Use when you have a spec or requirements for a multi-step task. Creates comprehensive implementation plans with bite-sized tasks, exact file paths, and complete code examples.
 
 ## Skill metadata
 

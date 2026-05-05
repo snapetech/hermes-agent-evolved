@@ -344,7 +344,6 @@ class ContextCompressor(ContextEngine):
         self._last_aux_model_failure_model = None
         self._last_compression_savings_pct = 100.0
         self._ineffective_compression_count = 0
-        self._summary_failure_cooldown_until = 0.0  # transient errors must not block a fresh session
 
     def update_model(
         self,
@@ -539,7 +538,7 @@ class ContextCompressor(ContextEngine):
             # Token-budget approach: walk backward accumulating tokens
             accumulated = 0
             boundary = len(result)
-            min_protect = min(protect_tail_count, len(result))
+            min_protect = min(protect_tail_count, len(result) - 1)
             for i in range(len(result) - 1, -1, -1):
                 msg = result[i]
                 raw_content = msg.get("content") or ""
@@ -554,16 +553,7 @@ class ContextCompressor(ContextEngine):
                     break
                 accumulated += msg_tokens
                 boundary = i
-            # Translate the budget walk into a "protected count", apply the
-            # floor in count-space (where `max` reads naturally: protect at
-            # least `min_protect` messages or whatever the budget reserved,
-            # whichever is more), then convert back to a prune boundary.
-            # Doing this in index-space with `max` would invert the direction
-            # (smaller index = MORE protected), so a generous budget would
-            # silently get truncated back down to `min_protect`.
-            budget_protect_count = len(result) - boundary
-            protected_count = max(budget_protect_count, min_protect)
-            prune_boundary = len(result) - protected_count
+            prune_boundary = max(boundary, len(result) - min_protect)
         else:
             prune_boundary = len(result) - protect_tail_count
 
@@ -578,8 +568,6 @@ class ContextCompressor(ContextEngine):
             content = msg.get("content") or ""
             # Skip multimodal content (list of content blocks)
             if isinstance(content, list):
-                continue
-            if not isinstance(content, str):
                 continue
             if len(content) < 200:
                 continue
@@ -599,8 +587,6 @@ class ContextCompressor(ContextEngine):
             content = msg.get("content", "")
             # Skip multimodal content (list of content blocks)
             if isinstance(content, list):
-                continue
-            if not isinstance(content, str):
                 continue
             if not content or content == _PRUNED_TOOL_PLACEHOLDER:
                 continue
@@ -917,19 +903,15 @@ The user has requested that this compaction PRIORITISE preserving all informatio
                 or "does not exist" in _err_str
                 or "no available channel" in _err_str
             )
-            _is_timeout = (
-                _status in (408, 429, 502, 504)
-                or "timeout" in _err_str
-            )
             if (
-                (_is_model_not_found or _is_timeout)
+                _is_model_not_found
                 and self.summary_model
                 and self.summary_model != self.model
                 and not getattr(self, "_summary_model_fallen_back", False)
             ):
                 self._summary_model_fallen_back = True
                 logging.warning(
-                    "Summary model '%s' unavailable (%s). "
+                    "Summary model '%s' not available (%s). "
                     "Falling back to main model '%s' for compression.",
                     self.summary_model, e, self.model,
                 )
@@ -993,38 +975,14 @@ The user has requested that this compaction PRIORITISE preserving all informatio
             return None
 
     @staticmethod
-    def _strip_summary_prefix(summary: str) -> str:
-        """Return summary body without the current or legacy handoff prefix."""
-        text = (summary or "").strip()
-        for prefix in (SUMMARY_PREFIX, LEGACY_SUMMARY_PREFIX):
-            if text.startswith(prefix):
-                return text[len(prefix):].lstrip()
-        return text
-
-    @classmethod
-    def _with_summary_prefix(cls, summary: str) -> str:
+    def _with_summary_prefix(summary: str) -> str:
         """Normalize summary text to the current compaction handoff format."""
-        text = cls._strip_summary_prefix(summary)
+        text = (summary or "").strip()
+        for prefix in (LEGACY_SUMMARY_PREFIX, SUMMARY_PREFIX):
+            if text.startswith(prefix):
+                text = text[len(prefix):].lstrip()
+                break
         return f"{SUMMARY_PREFIX}\n{text}" if text else SUMMARY_PREFIX
-
-    @staticmethod
-    def _is_context_summary_content(content: Any) -> bool:
-        text = _content_text_for_contains(content).lstrip()
-        return text.startswith(SUMMARY_PREFIX) or text.startswith(LEGACY_SUMMARY_PREFIX)
-
-    @classmethod
-    def _find_latest_context_summary(
-        cls,
-        messages: List[Dict[str, Any]],
-        start: int,
-        end: int,
-    ) -> tuple[Optional[int], str]:
-        """Find the newest handoff summary inside a compression window."""
-        for idx in range(end - 1, start - 1, -1):
-            content = messages[idx].get("content")
-            if cls._is_context_summary_content(content):
-                return idx, cls._strip_summary_prefix(_content_text_for_contains(content))
-        return None, ""
 
     # ------------------------------------------------------------------
     # Tool-call / tool-result pair integrity helpers
@@ -1034,8 +992,8 @@ The user has requested that this compaction PRIORITISE preserving all informatio
     def _get_tool_call_id(tc) -> str:
         """Extract the call ID from a tool_call entry (dict or SimpleNamespace)."""
         if isinstance(tc, dict):
-            return tc.get("call_id", "") or tc.get("id", "") or ""
-        return getattr(tc, "call_id", "") or getattr(tc, "id", "") or ""
+            return tc.get("id", "")
+        return getattr(tc, "id", "") or ""
 
     def _sanitize_tool_pairs(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Fix orphaned tool_call / tool_result pairs after compression.
@@ -1332,15 +1290,6 @@ The user has requested that this compaction PRIORITISE preserving all informatio
             return messages
 
         turns_to_summarize = messages[compress_start:compress_end]
-        summary_idx, summary_body = self._find_latest_context_summary(
-            messages,
-            compress_start,
-            compress_end,
-        )
-        if summary_idx is not None:
-            if summary_body and not self._previous_summary:
-                self._previous_summary = summary_body
-            turns_to_summarize = messages[summary_idx + 1:compress_end]
 
         if not self.quiet_mode:
             logger.info(
@@ -1418,19 +1367,6 @@ The user has requested that this compaction PRIORITISE preserving all informatio
                 # Merge the summary into the first tail message instead
                 # of inserting a standalone message that breaks alternation.
                 _merge_summary_into_tail = True
-
-        # When the summary lands as a standalone role="user" message,
-        # weak models read the verbatim "## Active Task" quote of a past
-        # user request as fresh input (#11475, #14521). Append the explicit
-        # end marker — the same one used in the merge-into-tail path — so
-        # the model has a clear "summary above, not new input" signal.
-        if not _merge_summary_into_tail and summary_role == "user":
-            summary = (
-                summary
-                + "\n\n--- END OF CONTEXT SUMMARY — "
-                "respond to the message below, not the summary above ---"
-            )
-
         if not _merge_summary_into_tail:
             compressed.append({"role": summary_role, "content": summary})
 

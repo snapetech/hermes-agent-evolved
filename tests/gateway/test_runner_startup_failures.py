@@ -63,6 +63,28 @@ class _SuccessfulAdapter(BasePlatformAdapter):
         return {"id": chat_id}
 
 
+class _StandbyConflictAdapter(BasePlatformAdapter):
+    def __init__(self):
+        super().__init__(PlatformConfig(enabled=True, token="***"), Platform.TELEGRAM)
+
+    async def connect(self) -> bool:
+        self._set_fatal_error(
+            "telegram-bot-token_lock",
+            "Telegram bot token already in use (PID 123). Standing by for handoff.",
+            retryable=True,
+        )
+        return False
+
+    async def disconnect(self) -> None:
+        self._mark_disconnected()
+
+    async def send(self, chat_id, content, reply_to=None, metadata=None):
+        raise NotImplementedError
+
+    async def get_chat_info(self, chat_id):
+        return {"id": chat_id}
+
+
 @pytest.mark.asyncio
 async def test_runner_returns_failure_for_retryable_startup_errors(monkeypatch, tmp_path):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
@@ -130,6 +152,40 @@ async def test_runner_records_connected_platform_state_on_success(monkeypatch, t
     assert state["platforms"]["discord"]["state"] == "connected"
     assert state["platforms"]["discord"]["error_code"] is None
     assert state["platforms"]["discord"]["error_message"] is None
+
+
+@pytest.mark.asyncio
+async def test_runner_keeps_warm_standby_alive_during_platform_lock_conflict(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_GATEWAY_WARM_STANDBY", "true")
+    config = GatewayConfig(
+        platforms={
+            Platform.TELEGRAM: PlatformConfig(enabled=True, token="***"),
+            Platform.API_SERVER: PlatformConfig(enabled=True),
+        },
+        sessions_dir=tmp_path / "sessions",
+    )
+    runner = GatewayRunner(config)
+
+    def _create_adapter(platform, platform_config):
+        if platform == Platform.TELEGRAM:
+            return _StandbyConflictAdapter()
+        if platform == Platform.API_SERVER:
+            return _SuccessfulAdapter()
+        raise AssertionError(platform)
+
+    monkeypatch.setattr(runner, "_create_adapter", _create_adapter)
+    monkeypatch.setattr(runner.hooks, "discover_and_load", lambda: None)
+    monkeypatch.setattr(runner.hooks, "emit", AsyncMock())
+
+    ok = await runner.start()
+
+    assert ok is True
+    assert Platform.TELEGRAM in runner._failed_platforms
+    assert runner._failed_platforms[Platform.TELEGRAM]["attempts"] == 0
+    state = read_runtime_status()
+    assert state["gateway_state"] == "running"
+    assert state["platforms"]["telegram"]["state"] == "standby"
 
 
 @pytest.mark.asyncio

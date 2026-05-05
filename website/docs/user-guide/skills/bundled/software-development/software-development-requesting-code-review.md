@@ -1,14 +1,14 @@
 ---
-title: "Requesting Code Review — Pre-commit review: security scan, quality gates, auto-fix"
+title: "Requesting Code Review"
 sidebar_label: "Requesting Code Review"
-description: "Pre-commit review: security scan, quality gates, auto-fix"
+description: "Pre-commit verification pipeline — static security scan, baseline-aware quality gates, independent reviewer subagent, and auto-fix loop"
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
 # Requesting Code Review
 
-Pre-commit review: security scan, quality gates, auto-fix.
+Pre-commit verification pipeline — static security scan, baseline-aware quality gates, independent reviewer subagent, and auto-fix loop. Use after code changes and before committing, pushing, or opening a PR.
 
 ## Skill metadata
 

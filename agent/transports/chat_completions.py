@@ -20,20 +20,13 @@ from agent.transports.types import NormalizedResponse, ToolCall, Usage
 
 
 def _build_gemini_thinking_config(model: str, reasoning_config: dict | None) -> dict | None:
-    """Translate Hermes/OpenRouter-style reasoning config to Gemini thinkingConfig."""
+    """Translate Hermes/OpenRouter-style reasoning config to Gemini thinkingConfig.
+
+    Gemini native/cloud-code adapters do not read ``extra_body.reasoning``.
+    They only inspect ``extra_body.thinking_config`` / ``thinkingConfig`` and
+    then request thought parts with ``includeThoughts`` enabled.
+    """
     if reasoning_config is None or not isinstance(reasoning_config, dict):
-        return None
-
-    normalized_model = (model or "").strip().lower()
-    if normalized_model.startswith("google/"):
-        normalized_model = normalized_model.split("/", 1)[1]
-
-    # ``thinking_config`` is a Gemini-only request parameter. The same
-    # ``gemini`` provider also serves Gemma (and historically PaLM/Bard);
-    # those reject the field with HTTP 400 "Unknown name 'thinking_config':
-    # Cannot find field" — including the polite ``{"includeThoughts": False}``
-    # form. Omit the field entirely on non-Gemini models. (#17426)
-    if not normalized_model.startswith("gemini"):
         return None
 
     if reasoning_config.get("enabled") is False:
@@ -46,6 +39,9 @@ def _build_gemini_thinking_config(model: str, reasoning_config: dict | None) -> 
         return {"includeThoughts": False}
 
     thinking_config: Dict[str, Any] = {"includeThoughts": True}
+    normalized_model = (model or "").strip().lower()
+    if normalized_model.startswith("google/"):
+        normalized_model = normalized_model.split("/", 1)[1]
 
     # Gemini 2.5 accepts thinkingBudget; don't guess a budget from Hermes'
     # coarse effort levels. ``includeThoughts`` alone is enough to surface
@@ -73,30 +69,6 @@ def _build_gemini_thinking_config(model: str, reasoning_config: dict | None) -> 
             )
 
     return thinking_config
-
-
-def _snake_case_gemini_thinking_config(config: dict | None) -> dict | None:
-    """Convert Gemini thinking config keys to the OpenAI-compat field names."""
-    if not isinstance(config, dict) or not config:
-        return None
-
-    translated: Dict[str, Any] = {}
-    if isinstance(config.get("includeThoughts"), bool):
-        translated["include_thoughts"] = config["includeThoughts"]
-    if isinstance(config.get("thinkingLevel"), str) and config["thinkingLevel"].strip():
-        translated["thinking_level"] = config["thinkingLevel"].strip().lower()
-    if isinstance(config.get("thinkingBudget"), (int, float)):
-        translated["thinking_budget"] = int(config["thinkingBudget"])
-    return translated or None
-
-
-def _is_gemini_openai_compat_base_url(base_url: Any) -> bool:
-    normalized = str(base_url or "").strip().rstrip("/").lower()
-    if not normalized:
-        return False
-    if "generativelanguage.googleapis.com" not in normalized:
-        return False
-    return normalized.endswith("/openai")
 
 
 class ChatCompletionsTransport(ProviderTransport):
@@ -337,7 +309,6 @@ class ChatCompletionsTransport(ProviderTransport):
         is_nous = params.get("is_nous", False)
         is_github_models = params.get("is_github_models", False)
         provider_name = str(params.get("provider_name") or "").strip().lower()
-        base_url = params.get("base_url")
 
         provider_prefs = params.get("provider_preferences")
         if provider_prefs and is_openrouter:
@@ -387,23 +358,17 @@ class ChatCompletionsTransport(ProviderTransport):
                 _enabled = reasoning_config.get("enabled", True)
                 if _effort == "none" or _enabled is False:
                     extra_body["think"] = False
+                    if "qwen3" in model_lower:
+                        chat_kwargs = extra_body.get("chat_template_kwargs")
+                        if not isinstance(chat_kwargs, dict):
+                            chat_kwargs = {}
+                        chat_kwargs["enable_thinking"] = False
+                        extra_body["chat_template_kwargs"] = chat_kwargs
 
         if is_qwen:
             extra_body["vl_high_resolution_images"] = True
 
-        if provider_name == "gemini":
-            raw_thinking_config = _build_gemini_thinking_config(model, reasoning_config)
-            if _is_gemini_openai_compat_base_url(base_url):
-                thinking_config = _snake_case_gemini_thinking_config(raw_thinking_config)
-                if thinking_config:
-                    openai_compat_extra = extra_body.get("extra_body", {})
-                    google_extra = openai_compat_extra.get("google", {})
-                    google_extra["thinking_config"] = thinking_config
-                    openai_compat_extra["google"] = google_extra
-                    extra_body["extra_body"] = openai_compat_extra
-            elif raw_thinking_config:
-                extra_body["thinking_config"] = raw_thinking_config
-        elif provider_name == "google-gemini-cli":
+        if provider_name in {"gemini", "google-gemini-cli"}:
             thinking_config = _build_gemini_thinking_config(model, reasoning_config)
             if thinking_config:
                 extra_body["thinking_config"] = thinking_config
@@ -419,7 +384,13 @@ class ChatCompletionsTransport(ProviderTransport):
         # Request overrides last (service_tier etc.)
         overrides = params.get("request_overrides")
         if overrides:
-            api_kwargs.update(overrides)
+            merged_overrides = dict(overrides)
+            override_extra_body = merged_overrides.pop("extra_body", None)
+            if isinstance(override_extra_body, dict):
+                merged_extra_body = dict(api_kwargs.get("extra_body") or {})
+                merged_extra_body.update(override_extra_body)
+                api_kwargs["extra_body"] = merged_extra_body
+            api_kwargs.update(merged_overrides)
 
         return api_kwargs
 
@@ -434,7 +405,7 @@ class ChatCompletionsTransport(ProviderTransport):
         """
         choice = response.choices[0]
         msg = choice.message
-        finish_reason = choice.finish_reason or "stop"
+        finish_reason = getattr(choice, "finish_reason", None) or "stop"
 
         tool_calls = None
         if msg.tool_calls:
@@ -456,7 +427,7 @@ class ChatCompletionsTransport(ProviderTransport):
                             pass
                     tc_provider_data["extra_content"] = extra
                 tool_calls.append(ToolCall(
-                    id=tc.id,
+                    id=getattr(tc, "id", None),
                     name=tc.function.name,
                     arguments=tc.function.arguments,
                     provider_data=tc_provider_data or None,
@@ -477,13 +448,9 @@ class ChatCompletionsTransport(ProviderTransport):
         # so keep them apart in provider_data rather than merging.
         reasoning = getattr(msg, "reasoning", None)
         reasoning_content = getattr(msg, "reasoning_content", None)
-        if reasoning_content is None and hasattr(msg, "model_extra"):
-            model_extra = getattr(msg, "model_extra", None) or {}
-            if isinstance(model_extra, dict) and "reasoning_content" in model_extra:
-                reasoning_content = model_extra["reasoning_content"]
 
         provider_data: Dict[str, Any] = {}
-        if reasoning_content is not None:
+        if reasoning_content:
             provider_data["reasoning_content"] = reasoning_content
         rd = getattr(msg, "reasoning_details", None)
         if rd:

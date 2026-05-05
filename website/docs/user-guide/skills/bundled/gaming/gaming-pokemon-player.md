@@ -1,14 +1,14 @@
 ---
-title: "Pokemon Player — Play Pokemon via headless emulator + RAM reads"
+title: "Pokemon Player — Play Pokemon games autonomously via headless emulation"
 sidebar_label: "Pokemon Player"
-description: "Play Pokemon via headless emulator + RAM reads"
+description: "Play Pokemon games autonomously via headless emulation"
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
 # Pokemon Player
 
-Play Pokemon via headless emulator + RAM reads.
+Play Pokemon games autonomously via headless emulation. Starts a game server, reads structured game state from RAM, makes strategic decisions, and sends button inputs — all from the terminal.
 
 ## Skill metadata
 

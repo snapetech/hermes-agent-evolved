@@ -1,0 +1,10 @@
+name: level-up
+version: 0.1.0
+description: Recovery recipes, escalation, memory harvest/promotion, boot checks, audits, TaskPacket, tool metrics, and LSP for cluster-hosted Hermes.
+author: Keith Stack
+provides_tools:
+  - lsp
+provides_hooks:
+  - pre_tool_call
+  - post_tool_call
+  - on_session_end

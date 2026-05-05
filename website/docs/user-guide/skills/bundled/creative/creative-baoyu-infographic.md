@@ -1,14 +1,14 @@
 ---
-title: "Baoyu Infographic — Infographics: 21 layouts x 21 styles (信息图, 可视化)"
+title: "Baoyu Infographic — Generate professional infographics with 21 layout types and 21 visual styles"
 sidebar_label: "Baoyu Infographic"
-description: "Infographics: 21 layouts x 21 styles (信息图, 可视化)"
+description: "Generate professional infographics with 21 layout types and 21 visual styles"
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
 # Baoyu Infographic
 
-Infographics: 21 layouts x 21 styles (信息图, 可视化).
+Generate professional infographics with 21 layout types and 21 visual styles. Analyzes content, recommends layout×style combinations, and generates publication-ready infographics. Use when user asks to create "infographic", "visual summary", "信息图", "可视化", or "高密度信息大图".
 
 ## Skill metadata
 
@@ -139,7 +139,6 @@ If a shortcut has **Prompt Notes**, append them to the generated prompt (Step 5)
 
 ## Output Structure
 
-<!-- ascii-guard-ignore -->
 ```
 infographic/{topic-slug}/
 ├── source-{slug}.{ext}
@@ -148,7 +147,6 @@ infographic/{topic-slug}/
 ├── prompts/infographic.md
 └── infographic.png
 ```
-<!-- ascii-guard-ignore-end -->
 
 Slug: 2-4 words kebab-case from topic. Conflict: append `-YYYYMMDD-HHMMSS`.
 

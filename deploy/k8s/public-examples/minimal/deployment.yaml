@@ -1,0 +1,146 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hermes-gateway
+  namespace: hermes
+  labels:
+    app: hermes-gateway
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: hermes-gateway
+  template:
+    metadata:
+      labels:
+        app: hermes-gateway
+    spec:
+      terminationGracePeriodSeconds: 90
+      serviceAccountName: hermes-agent
+      initContainers:
+        - name: bootstrap
+          image: registry.example.com/hermes-agent-sudo:replace-me
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              HERMES_UID="$(id -u hermes 2>/dev/null || echo 10000)"
+              HERMES_GID="$(id -g hermes 2>/dev/null || echo 10000)"
+              mkdir -p /opt/data/cron /opt/data/sessions /opt/data/logs \
+                /opt/data/hooks /opt/data/memories /opt/data/plugins \
+                /opt/data/skills /opt/data/skins /opt/data/plans \
+                /opt/data/workspace /opt/data/home /opt/data/home/.npm-global
+              cp /bootstrap/config.yaml /opt/data/config.yaml
+              if [ ! -f /opt/data/SOUL.md ]; then
+                cp /bootstrap/SOUL.md /opt/data/SOUL.md
+              fi
+              if [ ! -x /opt/data/workspace/.venv/bin/python ]; then
+                rm -rf /opt/data/workspace/.venv
+                python3 -m venv /opt/data/workspace/.venv
+              fi
+              chmod 0755 /opt/data || true
+              chown -R "$HERMES_UID:$HERMES_GID" /opt/data || true
+          volumeMounts:
+            - name: hermes-data
+              mountPath: /opt/data
+              subPath: .hermes
+            - name: hermes-bootstrap
+              mountPath: /bootstrap
+      containers:
+        - name: gateway
+          image: registry.example.com/hermes-agent-sudo:replace-me
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+          args:
+            - |
+              set -eu
+              while true; do
+                if /app/.venv/bin/hermes gateway run; then
+                  status=0
+                else
+                  status="$?"
+                fi
+                if [ "$status" -eq 75 ]; then
+                  echo "Gateway requested in-pod process restart; relaunching..." >&2
+                  sleep 1
+                  continue
+                fi
+                exit "$status"
+              done
+          env:
+            - name: HERMES_HOME
+              value: /opt/data
+            - name: HOME
+              value: /opt/data/home
+            - name: LANG
+              value: C.UTF-8
+            - name: LC_ALL
+              value: C.UTF-8
+            - name: VIRTUAL_ENV
+              value: /opt/data/workspace/.venv
+            - name: PATH
+              value: /opt/data/workspace/.venv/bin:/opt/data/home/.npm-global/bin:/opt/data/home/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+            - name: API_SERVER_ENABLED
+              value: "true"
+            - name: API_SERVER_HOST
+              value: 0.0.0.0
+            - name: API_SERVER_PORT
+              value: "8642"
+            - name: API_SERVER_MODEL_NAME
+              value: hermes-agent
+            - name: API_SERVER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-api-server
+                  key: API_SERVER_KEY
+          ports:
+            - name: api
+              containerPort: 8642
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8642
+            initialDelaySeconds: 20
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8642
+            initialDelaySeconds: 300
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 250m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          volumeMounts:
+            - name: hermes-data
+              mountPath: /opt/data
+              subPath: .hermes
+            - name: hermes-bootstrap
+              mountPath: /bootstrap
+      volumes:
+        - name: hermes-data
+          persistentVolumeClaim:
+            claimName: hermes-pvc
+        - name: hermes-bootstrap
+          configMap:
+            name: hermes-bootstrap
+            defaultMode: 493

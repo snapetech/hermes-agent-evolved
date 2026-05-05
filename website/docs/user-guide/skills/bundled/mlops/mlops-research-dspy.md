@@ -1,14 +1,14 @@
 ---
-title: "Dspy — DSPy: declarative LM programs, auto-optimize prompts, RAG"
+title: "Dspy"
 sidebar_label: "Dspy"
-description: "DSPy: declarative LM programs, auto-optimize prompts, RAG"
+description: "Build complex AI systems with declarative programming, optimize prompts automatically, create modular RAG systems and agents with DSPy - Stanford NLP's frame..."
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
 # Dspy
 
-DSPy: declarative LM programs, auto-optimize prompts, RAG.
+Build complex AI systems with declarative programming, optimize prompts automatically, create modular RAG systems and agents with DSPy - Stanford NLP's framework for systematic LM programming
 
 ## Skill metadata
 

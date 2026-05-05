@@ -49,10 +49,9 @@ class TestSuspendRecentlyActive:
         count = store.suspend_recently_active()
         assert count == 1
 
-        # Re-fetch — should be resume_pending (preserved, not wiped)
+        # Re-fetch — should be suspended now
         refreshed = store.get_or_create_session(source)
-        assert refreshed.resume_pending
-        assert refreshed.session_id == entry.session_id  # same session preserved
+        assert refreshed.was_auto_reset
 
     def test_does_not_suspend_old_sessions(self, tmp_path):
         store = _make_store(tmp_path)
@@ -67,22 +66,21 @@ class TestSuspendRecentlyActive:
         count = store.suspend_recently_active(max_age_seconds=120)
         assert count == 0
 
-    def test_already_resume_pending_not_double_counted(self, tmp_path):
+    def test_already_suspended_not_double_counted(self, tmp_path):
         store = _make_store(tmp_path)
         source = _make_source()
         entry = store.get_or_create_session(source)
 
-        # Mark resume_pending once
+        # Suspend once
         count1 = store.suspend_recently_active()
         assert count1 == 1
 
-        # Re-fetch returns the SAME session (preserved, not reset)
+        # Create a new session (the old one got reset on next access)
         entry2 = store.get_or_create_session(source)
-        assert entry2.session_id == entry.session_id
 
-        # Second call skips already-resume_pending entries
+        # Suspend again — the new session is recent but not yet suspended
         count2 = store.suspend_recently_active()
-        assert count2 == 0
+        assert count2 == 1
 
 
 # ---------------------------------------------------------------------------
@@ -182,11 +180,11 @@ class TestCleanShutdownMarker:
         else:
             store.suspend_recently_active()
 
-        # Session SHOULD be resume_pending (crash recovery preserves history)
+        # Session SHOULD be suspended (crash recovery)
         with store._lock:
             store._ensure_loaded_locked()
-            resume_count = sum(1 for e in store._entries.values() if e.resume_pending)
-        assert resume_count == 1, "Session should be resume_pending after crash (no marker)"
+            suspended_count = sum(1 for e in store._entries.values() if e.suspended)
+        assert suspended_count == 1, "Session should be suspended after crash (no marker)"
 
     def test_marker_written_on_restart_stop(self, tmp_path, monkeypatch):
         """stop(restart=True) should also write the marker."""

@@ -1,0 +1,94 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hermes-bootstrap
+  namespace: hermes
+data:
+  config.yaml: |
+    model:
+      default: "replace-model-name"
+      name: "replace-model-name"
+      provider: custom
+      base_url: "https://model-endpoint.example/v1"
+      context_length: 65536
+
+    custom_providers:
+      - name: "public-openai-compatible"
+        base_url: "https://model-endpoint.example/v1"
+        api_mode: chat_completions
+        models:
+          "replace-model-name":
+            context_length: 65536
+
+    fallback_model: null
+    fallback_providers: []
+
+    compression:
+      enabled: true
+      threshold: 0.15
+      target_ratio: 0.15
+      protect_last_n: 4
+
+    auxiliary:
+      compression:
+        provider: custom
+        model: "replace-model-name"
+        base_url: "https://model-endpoint.example/v1"
+        context_length: 65536
+        timeout: 600
+      session_search:
+        provider: custom
+        model: "replace-model-name"
+        base_url: "https://model-endpoint.example/v1"
+        context_length: 65536
+        timeout: 600
+
+    memory:
+      memory_enabled: true
+      user_profile_enabled: true
+      memory_char_limit: 1400
+      user_char_limit: 900
+
+    agent:
+      reasoning_effort: none
+      gateway_notify_interval: 0
+
+    platform_toolsets:
+      api_server:
+        - terminal
+        - file
+        - memory
+        - session_search
+        - clarify
+
+    terminal:
+      backend: local
+      cwd: /opt/data/workspace
+      timeout: 300
+
+    approvals:
+      mode: manual
+      timeout: 60
+      cron_mode: deny
+      gateway_timeout: 300
+
+    streaming:
+      enabled: true
+      transport: edit
+      edit_interval: 1.0
+      buffer_threshold: 40
+
+    display:
+      tool_progress: off
+      tool_progress_command: true
+      interim_assistant_messages: false
+      lifecycle_status_messages: false
+
+    logging:
+      level: INFO
+  SOUL.md: |
+    You are Hermes, a practical persistent agent.
+
+    Use the configured model endpoint and local tools carefully. Keep memory
+    concise, store durable facts rather than bulky logs, and prefer explicit
+    verification before changing external systems.

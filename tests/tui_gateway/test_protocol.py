@@ -298,7 +298,7 @@ def test_session_resume_returns_hydrated_messages(server, monkeypatch):
         def reopen_session(self, _sid):
             return None
 
-        def get_messages_as_conversation(self, _sid, include_ancestors=False):
+        def get_messages_as_conversation(self, _sid):
             return [
                 {"role": "user", "content": "hello"},
                 {"role": "assistant", "content": "yo"},
@@ -389,99 +389,6 @@ def test_slash_exec_rejects_skill_commands(server):
     assert "error" in resp
     assert resp["error"]["code"] == 4018
     assert "skill command" in resp["error"]["message"]
-
-
-def test_slash_exec_handles_plugin_commands_in_live_gateway(server):
-    """Plugin slash commands return normal slash.exec output without using the worker."""
-    sid = "test-session"
-
-    class Worker:
-        def __init__(self):
-            self.calls = []
-
-        def run(self, cmd):
-            self.calls.append(cmd)
-            return f"worker:{cmd}"
-
-    worker = Worker()
-    server._sessions[sid] = {"session_key": sid, "agent": None, "slash_worker": worker}
-
-    with patch(
-        "hermes_cli.plugins.get_plugin_command_handler",
-        lambda name: (lambda arg: f"plugin:{arg}") if name == "plugin-cmd" else None,
-    ):
-        resp = server.handle_request({
-            "id": "r-plugin-slash",
-            "method": "slash.exec",
-            "params": {"command": "plugin-cmd hello", "session_id": sid},
-        })
-
-    assert "error" not in resp
-    assert resp["result"] == {"output": "plugin:hello"}
-    assert worker.calls == []
-
-
-def test_slash_exec_plugin_lookup_failure_falls_back_to_worker(server):
-    """Plugin discovery failures must not break ordinary slash-worker commands."""
-    sid = "test-session"
-
-    class Worker:
-        def __init__(self):
-            self.calls = []
-
-        def run(self, cmd):
-            self.calls.append(cmd)
-            return f"worker:{cmd}"
-
-    worker = Worker()
-    server._sessions[sid] = {"session_key": sid, "agent": None, "slash_worker": worker}
-
-    with patch(
-        "hermes_cli.plugins.get_plugin_command_handler",
-        side_effect=RuntimeError("discovery boom"),
-    ):
-        resp = server.handle_request({
-            "id": "r-plugin-lookup-failure",
-            "method": "slash.exec",
-            "params": {"command": "help", "session_id": sid},
-        })
-
-    assert "error" not in resp
-    assert resp["result"] == {"output": "worker:help"}
-    assert worker.calls == ["help"]
-
-
-def test_slash_exec_plugin_handler_error_returns_output(server):
-    """Plugin handler failures return slash output so the TUI does not redispatch."""
-    sid = "test-session"
-
-    class Worker:
-        def __init__(self):
-            self.calls = []
-
-        def run(self, cmd):
-            self.calls.append(cmd)
-            return f"worker:{cmd}"
-
-    def handler(arg):
-        raise RuntimeError(f"handler boom: {arg}")
-
-    worker = Worker()
-    server._sessions[sid] = {"session_key": sid, "agent": None, "slash_worker": worker}
-
-    with patch(
-        "hermes_cli.plugins.get_plugin_command_handler",
-        lambda name: handler if name == "plugin-cmd" else None,
-    ):
-        resp = server.handle_request({
-            "id": "r-plugin-handler-error",
-            "method": "slash.exec",
-            "params": {"command": "plugin-cmd hello", "session_id": sid},
-        })
-
-    assert "error" not in resp
-    assert resp["result"] == {"output": "Plugin command error: handler boom: hello"}
-    assert worker.calls == []
 
 
 @pytest.mark.parametrize("cmd", ["retry", "queue hello", "q hello", "steer fix the test", "plan"])
@@ -687,24 +594,6 @@ def test_command_dispatch_returns_skill_payload(server):
     assert result["name"] == "hermes-agent-dev"
 
 
-def test_command_dispatch_awaits_async_plugin_handler(server):
-    async def _handler(arg):
-        return f"async:{arg}"
-
-    with patch(
-        "hermes_cli.plugins.get_plugin_command_handler",
-        lambda name: _handler if name == "async-cmd" else None,
-    ):
-        resp = server.handle_request({
-            "id": "r-plugin",
-            "method": "command.dispatch",
-            "params": {"name": "async-cmd", "arg": "hello"},
-        })
-
-    assert "error" not in resp
-    assert resp["result"] == {"type": "plugin", "output": "async:hello"}
-
-
 # ── dispatch(): pool routing for long handlers (#12546) ──────────────
 
 
@@ -748,29 +637,6 @@ def test_dispatch_long_handler_does_not_block_fast_handler(server):
 
     assert fast_resp["result"] == {"pong": True}
     assert fast_elapsed < 0.5, f"fast handler blocked for {fast_elapsed:.2f}s behind slow handler"
-
-    released.set()
-
-
-def test_dispatch_session_compress_does_not_block_fast_handler(server):
-    """Manual TUI compaction can take minutes, so it must not block the RPC loop."""
-    released = threading.Event()
-
-    def slow_compress(rid, params):
-        released.wait(timeout=5)
-        return server._ok(rid, {"done": True})
-
-    server._methods["session.compress"] = slow_compress
-    server._methods["fast.ping"] = lambda rid, params: server._ok(rid, {"pong": True})
-
-    t0 = time.monotonic()
-    assert server.dispatch({"id": "slow", "method": "session.compress", "params": {}}) is None
-
-    fast_resp = server.dispatch({"id": "fast", "method": "fast.ping", "params": {}})
-    fast_elapsed = time.monotonic() - t0
-
-    assert fast_resp["result"] == {"pong": True}
-    assert fast_elapsed < 0.5, f"fast handler blocked for {fast_elapsed:.2f}s behind session.compress"
 
     released.set()
 

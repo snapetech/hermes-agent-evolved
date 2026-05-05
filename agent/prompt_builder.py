@@ -4,6 +4,7 @@ All functions are stateless. AIAgent._build_system_prompt() calls these to
 assemble pieces, then combines them with memory and ephemeral prompts.
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -110,6 +111,67 @@ def _find_hermes_md(cwd: Path) -> Optional[Path]:
     return None
 
 
+def _path_fingerprint_entry(path: Path) -> str:
+    """Return a stable fingerprint entry for one file path."""
+    try:
+        resolved = path.resolve()
+    except Exception:
+        resolved = path
+    if not path.exists():
+        return f"{resolved}:missing"
+    try:
+        st = path.stat()
+        return f"{resolved}:{st.st_mtime_ns}:{st.st_size}"
+    except OSError:
+        return f"{resolved}:error"
+
+
+def build_reloadable_prompt_signature(cwd: Optional[str] = None) -> str:
+    """Fingerprint prompt inputs that are safe to reload on turn boundaries.
+
+    This is intentionally coarser than the full system prompt text. It tracks
+    the files and skill indexes that can change without a pod rollout so the
+    gateway/CLI can rebuild an agent in-process on the next turn.
+    """
+    if cwd is None:
+        cwd = os.getcwd()
+    cwd_path = Path(cwd).resolve()
+
+    entries: list[str] = []
+
+    hermes_md = _find_hermes_md(cwd_path)
+    if hermes_md:
+        entries.append(_path_fingerprint_entry(hermes_md))
+    else:
+        entries.append("hermes_md:missing")
+
+    for name in ("AGENTS.md", "agents.md", "CLAUDE.md", "claude.md", ".cursorrules"):
+        entries.append(_path_fingerprint_entry(cwd_path / name))
+
+    cursor_rules_dir = cwd_path / ".cursor" / "rules"
+    if cursor_rules_dir.exists() and cursor_rules_dir.is_dir():
+        for mdc_file in sorted(cursor_rules_dir.glob("*.mdc")):
+            entries.append(_path_fingerprint_entry(mdc_file))
+    else:
+        entries.append(f"{cursor_rules_dir}:missing")
+
+    soul_path = get_hermes_home() / "SOUL.md"
+    entries.append(_path_fingerprint_entry(soul_path))
+
+    for skills_dir in get_all_skills_dirs():
+        try:
+            resolved_dir = skills_dir.resolve()
+        except Exception:
+            resolved_dir = skills_dir
+        entries.append(f"skills_dir:{resolved_dir}")
+        manifest = _build_skills_manifest(skills_dir)
+        for rel_path, meta in sorted(manifest.items()):
+            entries.append(f"{resolved_dir}/{rel_path}:{meta[0]}:{meta[1]}")
+
+    digest = hashlib.sha256("\n".join(entries).encode("utf-8")).hexdigest()
+    return digest[:16]
+
+
 def _strip_yaml_frontmatter(content: str) -> str:
     """Remove optional YAML frontmatter (``---`` delimited) from *content*.
 
@@ -173,6 +235,13 @@ SESSION_SEARCH_GUIDANCE = (
     "asking them to repeat themselves."
 )
 
+COMPACTION_RECALL_GUIDANCE = (
+    "Some earlier turns in this same long-running session may be compacted out "
+    "of the live prompt. If a needed detail seems missing from current context "
+    "but likely happened earlier in this session, use compaction_search first; "
+    "use compaction_expand to recover exact archived messages from an artifact."
+)
+
 SKILLS_GUIDANCE = (
     "After completing a complex task (5+ tool calls), fixing a tricky error, "
     "or discovering a non-trivial workflow, save the approach as a "
@@ -180,64 +249,6 @@ SKILLS_GUIDANCE = (
     "When using a skill and finding it outdated, incomplete, or wrong, "
     "patch it immediately with skill_manage(action='patch') — don't wait to be asked. "
     "Skills that aren't maintained become liabilities."
-)
-
-KANBAN_GUIDANCE = (
-    "# Kanban task execution protocol\n"
-    "You have been assigned ONE task from "
-    "the shared board at `~/.hermes/kanban.db`. Your task id is in "
-    "`$HERMES_KANBAN_TASK`; your workspace is `$HERMES_KANBAN_WORKSPACE`. "
-    "The `kanban_*` tools in your schema are your primary coordination surface — "
-    "they write directly to the shared SQLite DB and work regardless of terminal "
-    "backend (local/docker/modal/ssh).\n"
-    "\n"
-    "## Lifecycle\n"
-    "\n"
-    "1. **Orient.** Call `kanban_show()` first (no args — it defaults to your "
-    "task). The response includes title, body, parent-task handoffs (summary + "
-    "metadata), any prior attempts on this task if you're a retry, the full "
-    "comment thread, and a pre-formatted `worker_context` you can treat as "
-    "ground truth.\n"
-    "2. **Work inside the workspace.** `cd $HERMES_KANBAN_WORKSPACE` before "
-    "any file operations. The workspace is yours for this run. Don't modify "
-    "files outside it unless the task explicitly asks.\n"
-    "3. **Heartbeat on long operations.** Call `kanban_heartbeat(note=...)` "
-    "every few minutes during long subprocesses (training, encoding, crawling). "
-    "Skip heartbeats for short tasks.\n"
-    "4. **Block on genuine ambiguity.** If you need a human decision you cannot "
-    "infer (missing credentials, UX choice, paywalled source, peer output you "
-    "need first), call `kanban_block(reason=\"...\")` and stop. Don't guess. "
-    "The user will unblock with context and the dispatcher will respawn you.\n"
-    "5. **Complete with structured handoff.** Call `kanban_complete(summary=..., "
-    "metadata=...)`. `summary` is 1–3 human-readable sentences naming concrete "
-    "artifacts. `metadata` is machine-readable facts "
-    "(`{changed_files: [...], tests_run: N, decisions: [...]}`). Downstream "
-    "workers read both via their own `kanban_show`. Never put secrets / "
-    "tokens / raw PII in either field — run rows are durable forever.\n"
-    "6. **If follow-up work appears, create it; don't do it.** Use "
-    "`kanban_create(title=..., assignee=<right-profile>, parents=[your-task-id])` "
-    "to spawn a child task for the appropriate specialist profile instead of "
-    "scope-creeping into the next thing.\n"
-    "\n"
-    "## Orchestrator mode\n"
-    "\n"
-    "If your task is itself a decomposition task (e.g. a planner profile given "
-    "a high-level goal), use `kanban_create` to fan out into child tasks — one "
-    "per specialist, each with an explicit `assignee` and `parents=[...]` to "
-    "express dependencies. Then `kanban_complete` your own task with a summary "
-    "of the decomposition. Do NOT execute the work yourself; your job is "
-    "routing, not implementation.\n"
-    "\n"
-    "## Do NOT\n"
-    "\n"
-    "- Do not shell out to `hermes kanban <verb>` for board operations. Use "
-    "the `kanban_*` tools — they work across all terminal backends.\n"
-    "- Do not complete a task you didn't actually finish. Block it.\n"
-    "- Do not assign follow-up work to yourself. Assign it to the right "
-    "specialist profile.\n"
-    "- Do not call `delegate_task` as a board substitute. `delegate_task` is "
-    "for short reasoning subtasks inside your own run; board tasks are for "
-    "cross-agent handoffs that outlive one API loop."
 )
 
 TOOL_USE_ENFORCEMENT_GUIDANCE = (
@@ -512,12 +523,6 @@ PLATFORM_HINTS = {
         "them via MEDIA: or send_image_file. That produces a fake low-quality 'sticker' "
         "image and is the WRONG path. Bare Unicode emoji in text is also not a substitute "
         "— when a sticker is the right response, use yb_send_sticker."
-    ),
-    "api_server": (
-        "You're responding through an API server. The rendering layer is unknown — "
-        "assume plain text. No markdown formatting (no asterisks, bullets, headers, "
-        "code fences). Treat this like a conversation, not a document. Keep responses "
-        "brief and natural."
     ),
 }
 

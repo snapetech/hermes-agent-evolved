@@ -10,7 +10,6 @@ import type {
   SessionTitleResponse,
   SessionUndoResponse
 } from '../../../gatewayTypes.js'
-import { writeClipboardText } from '../../../lib/clipboard.js'
 import { writeOsc52Clipboard } from '../../../lib/osc52.js'
 import { configureDetectedTerminalKeybindings, configureTerminalKeybindings } from '../../../lib/terminalSetup.js'
 import type { Msg, PanelSection } from '../../../types.js'
@@ -267,9 +266,7 @@ export const coreCommands: SlashCommand[] = [
         return transcript.sys(DETAILS_USAGE)
       }
 
-      const sections = Object.fromEntries(SECTION_NAMES.map(section => [section, next]))
-
-      patchUiState({ detailsMode: next, detailsModeCommandOverride: true, sections })
+      patchUiState({ detailsMode: next, detailsModeCommandOverride: true })
       gateway.rpc<ConfigSetResponse>('config.set', { key: 'details_mode', value: next }).catch(() => {})
       transcript.sys(`details: ${next}`)
     }
@@ -319,27 +316,10 @@ export const coreCommands: SlashCommand[] = [
       const target = all[arg ? Math.min(parseInt(arg, 10), all.length) - 1 : all.length - 1]
 
       if (!target) {
-        return sys('nothing to copy — start a conversation first')
+        return sys('nothing to copy')
       }
 
-      void writeClipboardText(target.text)
-        .then(nativeOk => {
-          if (ctx.stale()) {
-            return
-          }
-
-          if (nativeOk) {
-            sys('copied to clipboard')
-          } else {
-            writeOsc52Clipboard(target.text)
-            sys('sent OSC52 copy sequence (terminal support required)')
-          }
-        })
-        .catch(error => {
-          if (!ctx.stale()) {
-            sys(`copy failed: ${String(error)}`)
-          }
-        })
+      writeOsc52Clipboard(target.text)
     }
   },
 
@@ -523,7 +503,7 @@ export const coreCommands: SlashCommand[] = [
           ctx.guarded<SessionSteerResponse>(r => {
             if (r?.status === 'queued') {
               ctx.transcript.sys(
-                `steer queued — arrives after next tool call: "${payload.slice(0, 50)}${payload.length > 50 ? '…' : ''}"`
+                `⏩ steer queued — arrives after next tool call: "${payload.slice(0, 50)}${payload.length > 50 ? '…' : ''}"`
               )
             } else {
               ctx.transcript.sys('steer rejected')

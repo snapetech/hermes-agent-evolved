@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "description": "Public-safe runtime package seed references. Source files carry package names; real auth/cache directories are private runtime state.",
+  "manifests": {
+    "apt": "deploy/k8s/apt-packages.txt",
+    "pip": "deploy/k8s/requirements-persistent.txt",
+    "npm": "deploy/k8s/npm-global-packages.txt"
+  },
+  "drift_check": "python scripts/check_runtime_package_drift.py --json",
+  "promotion_policy": "Promote only package names and version constraints that are useful after restart. Never promote auth caches, tokens, sessions, logs, or private workspace files."
+}

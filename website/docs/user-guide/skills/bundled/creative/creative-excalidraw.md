@@ -1,14 +1,14 @@
 ---
-title: "Excalidraw — Hand-drawn Excalidraw JSON diagrams (arch, flow, seq)"
+title: "Excalidraw — Create hand-drawn style diagrams using Excalidraw JSON format"
 sidebar_label: "Excalidraw"
-description: "Hand-drawn Excalidraw JSON diagrams (arch, flow, seq)"
+description: "Create hand-drawn style diagrams using Excalidraw JSON format"
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
 # Excalidraw
 
-Hand-drawn Excalidraw JSON diagrams (arch, flow, seq).
+Create hand-drawn style diagrams using Excalidraw JSON format. Generate .excalidraw files for architecture diagrams, flowcharts, sequence diagrams, concept maps, and more. Files can be opened at excalidraw.com or uploaded for shareable links.
 
 ## Skill metadata
 
@@ -30,10 +30,6 @@ The following is the complete skill definition that Hermes loads when this skill
 # Excalidraw Diagram Skill
 
 Create diagrams by writing standard Excalidraw element JSON and saving as `.excalidraw` files. These files can be drag-and-dropped onto [excalidraw.com](https://excalidraw.com) for viewing and editing. No accounts, no API keys, no rendering libraries -- just JSON.
-
-## When to use
-
-Generate `.excalidraw` files for architecture diagrams, flowcharts, sequence diagrams, concept maps, and more. Files can be opened at excalidraw.com or uploaded for shareable links.
 
 ## Workflow
 

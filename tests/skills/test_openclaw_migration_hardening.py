@@ -54,7 +54,7 @@ def test_redact_replaces_secret_by_value_pattern():
 
 def test_redact_handles_github_token_pattern():
     mod = _load()
-    out = mod.redact_migration_value({"detail": "token: ghp_1234567890abcdef1234"})
+    out = mod.redact_migration_value({"detail": "token: GITHUB_TOKEN_PLACEHOLDER"})
     assert "ghp_" not in out["detail"]
     assert mod.REDACTED_MIGRATION_VALUE in out["detail"]
 

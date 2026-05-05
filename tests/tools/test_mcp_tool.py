@@ -1200,9 +1200,13 @@ class TestBuildSafeEnv:
             "TERM": "xterm",
             "SHELL": "/bin/bash",
             "TMPDIR": "/tmp",
+            "DISPLAY": ":1",
+            "WAYLAND_DISPLAY": "wayland-0",
+            "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus",
+            "XAUTHORITY": "/home/test/.Xauthority",
             "XDG_DATA_HOME": "/home/test/.local/share",
             "SECRET_KEY": "should_not_appear",
-            "AWS_ACCESS_KEY_ID": "AKIAIOSFODNN7EXAMPLE",
+            "AWS_ACCESS_KEY_ID": "AWS_KEY_ID_PLACEHOLDER",
         }
         with patch.dict("os.environ", fake_env, clear=True):
             result = _build_safe_env(None)
@@ -1213,6 +1217,10 @@ class TestBuildSafeEnv:
         assert result["USER"] == "test"
         assert result["LANG"] == "en_US.UTF-8"
         assert result["XDG_DATA_HOME"] == "/home/test/.local/share"
+        assert result["DISPLAY"] == ":1"
+        assert result["WAYLAND_DISPLAY"] == "wayland-0"
+        assert result["DBUS_SESSION_BUS_ADDRESS"] == "unix:path=/run/user/1000/bus"
+        assert result["XAUTHORITY"] == "/home/test/.Xauthority"
         # Unsafe vars excluded
         assert "SECRET_KEY" not in result
         assert "AWS_ACCESS_KEY_ID" not in result
@@ -1254,7 +1262,7 @@ class TestBuildSafeEnv:
         fake_env = {
             "PATH": "/usr/bin",
             "AWS_SECRET_ACCESS_KEY": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-            "GITHUB_TOKEN": "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "GITHUB_TOKEN": "GITHUB_TOKEN_PLACEHOLDER",
             "OPENAI_API_KEY": "sk-proj-abc123",
             "DATABASE_URL": "postgres://user:pass@localhost/db",
             "API_SECRET": "supersecret",

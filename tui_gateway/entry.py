@@ -1,18 +1,7 @@
-import os
-import sys
-
-# Guard against a local utils/ (or other package) in CWD shadowing installed
-# hermes modules.  hermes_cli sets HERMES_PYTHON_SRC_ROOT before spawning this
-# subprocess; inserting it first ensures the installed packages win.
-_src_root = os.environ.get("HERMES_PYTHON_SRC_ROOT", "")
-if _src_root and _src_root not in sys.path:
-    sys.path.insert(0, _src_root)
-# Strip '' and '.' — both resolve to CWD at import time and can let a local
-# directory shadow installed packages.
-sys.path = [p for p in sys.path if p not in ("", ".")]
-
 import json
+import os
 import signal
+import sys
 import time
 import traceback
 
@@ -176,29 +165,11 @@ def main():
     # a model_tools.py module-level side effect; moved to explicit
     # startup calls to avoid freezing the gateway's loop on lazy import
     # (#16856).
-    #
-    # Cold-start guard: importing ``tools.mcp_tool`` transitively pulls the
-    # full MCP SDK (mcp, pydantic, httpx, jsonschema, starlette parsers —
-    # ~200ms on macOS), which runs on the TUI's critical path before
-    # ``gateway.ready`` can be emitted.  The overwhelming majority of users
-    # have no ``mcp_servers`` configured, in which case every byte of that
-    # import is wasted.  Check the config first (cheap — it's already been
-    # loaded once by ``_config_mtime`` elsewhere) and only pay the import
-    # cost when there's actually MCP work to do.
     try:
-        from hermes_cli.config import read_raw_config
-        _mcp_servers = (read_raw_config() or {}).get("mcp_servers")
-        _has_mcp_servers = isinstance(_mcp_servers, dict) and len(_mcp_servers) > 0
+        from tools.mcp_tool import discover_mcp_tools
+        discover_mcp_tools()
     except Exception:
-        # Be conservative: if we can't decide, fall back to the old
-        # behaviour and let the discovery path handle its own errors.
-        _has_mcp_servers = True
-    if _has_mcp_servers:
-        try:
-            from tools.mcp_tool import discover_mcp_tools
-            discover_mcp_tools()
-        except Exception:
-            pass
+        pass
 
     if not write_json({
         "jsonrpc": "2.0",

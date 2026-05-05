@@ -1,14 +1,14 @@
 ---
-title: "Outlines — Outlines: structured JSON/regex/Pydantic LLM generation"
+title: "Outlines"
 sidebar_label: "Outlines"
-description: "Outlines: structured JSON/regex/Pydantic LLM generation"
+description: "Guarantee valid JSON/XML/code structure during generation, use Pydantic models for type-safe outputs, support local models (Transformers, vLLM), and maximize..."
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
 # Outlines
 
-Outlines: structured JSON/regex/Pydantic LLM generation.
+Guarantee valid JSON/XML/code structure during generation, use Pydantic models for type-safe outputs, support local models (Transformers, vLLM), and maximize inference speed with Outlines - dottxt.ai's structured generation library
 
 ## Skill metadata
 

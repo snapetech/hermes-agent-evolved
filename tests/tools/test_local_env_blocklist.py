@@ -121,6 +121,9 @@ class TestProviderEnvBlocklist:
             "WHATSAPP_ALLOWED_USERS": "+15555550123",
             "SIGNAL_ACCOUNT": "+15555550124",
             "HASS_TOKEN": "ha-secret",
+            "HERMES_SIEM_API_KEY": "siem-secret",
+            "ELASTICSEARCH_API_KEY": "elastic-secret",
+            "ELASTICSEARCH_PASSWORD": "elastic-password",
             "EMAIL_PASSWORD": "email-secret",
             "FIRECRAWL_API_KEY": "fc-secret",
             "BROWSERBASE_PROJECT_ID": "bb-project",
@@ -132,10 +135,6 @@ class TestProviderEnvBlocklist:
             "MODAL_TOKEN_ID": "modal-id",
             "MODAL_TOKEN_SECRET": "modal-secret",
             "DAYTONA_API_KEY": "daytona-key",
-            "VERCEL_OIDC_TOKEN": "vercel-oidc-token",
-            "VERCEL_TOKEN": "vercel-token",
-            "VERCEL_PROJECT_ID": "vercel-project",
-            "VERCEL_TEAM_ID": "vercel-team",
         }
         result_env = _run_with_env(extra_os_env=leaked_vars)
 
@@ -277,6 +276,17 @@ class TestBlocklistCoverage:
             "SIGNAL_IGNORE_STORIES",
             "HASS_TOKEN",
             "HASS_URL",
+            "HERMES_SIEM_ELASTICSEARCH_URL",
+            "HERMES_SIEM_KIBANA_URL",
+            "HERMES_SIEM_API_KEY",
+            "HERMES_SIEM_USERNAME",
+            "HERMES_SIEM_PASSWORD",
+            "ELASTICSEARCH_URL",
+            "ELASTICSEARCH_HOST",
+            "ELASTICSEARCH_API_KEY",
+            "ELASTICSEARCH_USERNAME",
+            "ELASTICSEARCH_PASSWORD",
+            "KIBANA_URL",
             "EMAIL_ADDRESS",
             "EMAIL_PASSWORD",
             "EMAIL_IMAP_HOST",
@@ -291,10 +301,6 @@ class TestBlocklistCoverage:
             "MODAL_TOKEN_ID",
             "MODAL_TOKEN_SECRET",
             "DAYTONA_API_KEY",
-            "VERCEL_OIDC_TOKEN",
-            "VERCEL_TOKEN",
-            "VERCEL_PROJECT_ID",
-            "VERCEL_TEAM_ID",
         }
         assert extras.issubset(_HERMES_PROVIDER_ENV_BLOCKLIST)
 

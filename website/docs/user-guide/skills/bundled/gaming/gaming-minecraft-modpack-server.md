@@ -1,14 +1,14 @@
 ---
-title: "Minecraft Modpack Server — Host modded Minecraft servers (CurseForge, Modrinth)"
+title: "Minecraft Modpack Server — Set up a modded Minecraft server from a CurseForge/Modrinth server pack zip"
 sidebar_label: "Minecraft Modpack Server"
-description: "Host modded Minecraft servers (CurseForge, Modrinth)"
+description: "Set up a modded Minecraft server from a CurseForge/Modrinth server pack zip"
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
 # Minecraft Modpack Server
 
-Host modded Minecraft servers (CurseForge, Modrinth).
+Set up a modded Minecraft server from a CurseForge/Modrinth server pack zip. Covers NeoForge/Forge install, Java version, JVM tuning, firewall, LAN config, backups, and launch scripts.
 
 ## Skill metadata
 

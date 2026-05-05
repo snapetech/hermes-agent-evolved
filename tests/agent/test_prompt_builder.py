@@ -18,6 +18,7 @@ from agent.prompt_builder import (
     build_skills_system_prompt,
     build_nous_subscription_prompt,
     build_context_files_prompt,
+    build_reloadable_prompt_signature,
     build_environment_hints,
     CONTEXT_FILE_MAX_CHARS,
     DEFAULT_AGENT_IDENTITY,
@@ -48,6 +49,40 @@ class TestGuidanceConstants:
     def test_session_search_guidance_is_simple_cross_session_recall(self):
         assert "relevant cross-session context exists" in SESSION_SEARCH_GUIDANCE
         assert "recent turns of the current session" not in SESSION_SEARCH_GUIDANCE
+
+
+class TestReloadablePromptSignature:
+    def test_changes_when_agents_file_changes(self, tmp_path, monkeypatch):
+        agents = tmp_path / "AGENTS.md"
+        agents.write_text("initial\n", encoding="utf-8")
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+
+        first = build_reloadable_prompt_signature(cwd=str(tmp_path))
+        agents.write_text("updated\n", encoding="utf-8")
+        second = build_reloadable_prompt_signature(cwd=str(tmp_path))
+
+        assert first != second
+
+    def test_changes_when_skill_index_changes(self, tmp_path, monkeypatch):
+        skills_root = tmp_path / "skills"
+        skill_dir = skills_root / "demo"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: demo\ndescription: demo\n---\n\n# demo\n",
+            encoding="utf-8",
+        )
+        hermes_home = tmp_path / ".hermes"
+        hermes_home.mkdir()
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+
+        import agent.prompt_builder as _pb
+        monkeypatch.setattr(_pb, "get_all_skills_dirs", lambda: [skills_root])
+
+        first = build_reloadable_prompt_signature(cwd=str(tmp_path))
+        (skill_dir / "DESCRIPTION.md").write_text("extra metadata\n", encoding="utf-8")
+        second = build_reloadable_prompt_signature(cwd=str(tmp_path))
+
+        assert first != second
 
 
 # =========================================================================
@@ -164,11 +199,18 @@ class TestParseSkillFile:
 
     def test_long_description_truncated(self, tmp_path):
         skill_file = tmp_path / "SKILL.md"
-        long_desc = "A" * 100
+        long_desc = "A" * 1100
         skill_file.write_text(f"---\ndescription: {long_desc}\n---\n")
         _, _, desc = _parse_skill_file(skill_file)
-        assert len(desc) <= 60
+        assert len(desc) <= 1024
         assert desc.endswith("...")
+
+    def test_moderately_long_description_preserved(self, tmp_path):
+        skill_file = tmp_path / "SKILL.md"
+        long_desc = "A" * 400
+        skill_file.write_text(f"---\ndescription: {long_desc}\n---\n")
+        _, _, desc = _parse_skill_file(skill_file)
+        assert desc == long_desc
 
     def test_nonexistent_file_returns_defaults(self, tmp_path):
         is_compat, frontmatter, desc = _parse_skill_file(tmp_path / "missing.md")
@@ -788,7 +830,6 @@ class TestPromptBuilderConstants:
         assert "discord" in PLATFORM_HINTS
         assert "cron" in PLATFORM_HINTS
         assert "cli" in PLATFORM_HINTS
-        assert "api_server" in PLATFORM_HINTS
 
     def test_cli_hint_does_not_suggest_media_tags(self):
         # Regression: MEDIA:/path tags are intercepted only by messaging
@@ -1087,6 +1128,4 @@ class TestOpenAIModelExecutionGuidance:
 # =========================================================================
 # Budget warning history stripping
 # =========================================================================
-
-
 

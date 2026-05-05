@@ -1,14 +1,14 @@
 ---
-title: "Llm Wiki — Karpathy's LLM Wiki: build/query interlinked markdown KB"
+title: "Llm Wiki — Karpathy's LLM Wiki — build and maintain a persistent, interlinked markdown knowledge base"
 sidebar_label: "Llm Wiki"
-description: "Karpathy's LLM Wiki: build/query interlinked markdown KB"
+description: "Karpathy's LLM Wiki — build and maintain a persistent, interlinked markdown knowledge base"
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
 # Llm Wiki
 
-Karpathy's LLM Wiki: build/query interlinked markdown KB.
+Karpathy's LLM Wiki — build and maintain a persistent, interlinked markdown knowledge base. Ingest sources, query compiled knowledge, and lint for consistency.
 
 ## Skill metadata
 
@@ -64,7 +64,6 @@ any editor. No database, no special tooling required.
 
 ## Architecture: Three Layers
 
-<!-- ascii-guard-ignore -->
 ```
 wiki/
 ├── SCHEMA.md           # Conventions, structure rules, domain config
@@ -80,7 +79,6 @@ wiki/
 ├── comparisons/        # Layer 2: Side-by-side analyses
 └── queries/            # Layer 2: Filed query results worth keeping
 ```
-<!-- ascii-guard-ignore-end -->
 
 **Layer 1 — Raw Sources:** Immutable. The agent reads but never modifies these.
 **Layer 2 — The Wiki:** Agent-owned markdown files. Created, updated, and

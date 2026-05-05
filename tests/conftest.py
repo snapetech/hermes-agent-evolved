@@ -20,7 +20,6 @@ test runner at ``scripts/run_tests.sh``.
 """
 
 import asyncio
-import logging
 import os
 import re
 import signal
@@ -71,6 +70,7 @@ _CREDENTIAL_NAMES = frozenset({
     "GH_TOKEN",
     "GITHUB_TOKEN",
     "OPENAI_API_KEY",
+    "MANIFEST_API_KEY",
     "OPENROUTER_API_KEY",
     "NOUS_API_KEY",
     "GEMINI_API_KEY",
@@ -142,6 +142,7 @@ _CREDENTIAL_NAMES = frozenset({
     "GATEWAY_PROXY_URL",
     "GEMINI_BASE_URL",
     "OPENAI_BASE_URL",
+    "MANIFEST_BASE_URL",
     "OPENROUTER_BASE_URL",
     "OLLAMA_BASE_URL",
     "GROQ_BASE_URL",
@@ -175,27 +176,19 @@ _HERMES_BEHAVIORAL_VARS = frozenset({
     "HERMES_SESSION_KEY",
     "HERMES_GATEWAY_SESSION",
     "HERMES_PLATFORM",
-    "HERMES_MODEL",
-    "HERMES_INFERENCE_MODEL",
     "HERMES_INFERENCE_PROVIDER",
-    "HERMES_TUI_PROVIDER",
     "HERMES_MANAGED",
     "HERMES_DEV",
     "HERMES_CONTAINER",
     "HERMES_EPHEMERAL_SYSTEM_PROMPT",
+    "HERMES_IGNORE_RULES",
+    "HERMES_IGNORE_USER_CONFIG",
+    "HERMES_ENABLE_PROJECT_PLUGINS",
     "HERMES_TIMEZONE",
     "HERMES_REDACT_SECRETS",
     "HERMES_BACKGROUND_NOTIFICATIONS",
     "HERMES_EXEC_ASK",
     "HERMES_HOME_MODE",
-    "TERMINAL_CWD",
-    "TERMINAL_ENV",
-    "TERMINAL_VERCEL_RUNTIME",
-    "TERMINAL_CONTAINER_CPU",
-    "TERMINAL_CONTAINER_DISK",
-    "TERMINAL_CONTAINER_MEMORY",
-    "TERMINAL_CONTAINER_PERSISTENT",
-    "TERMINAL_DOCKER_RUN_AS_HOST_USER",
     "BROWSER_CDP_URL",
     "CAMOFOX_URL",
     # Platform allowlists — not credentials, but if set from any source
@@ -338,14 +331,6 @@ def _reset_module_state():
     that don't exist yet (test collection before production import) are
     skipped silently — production import later creates fresh empty state.
     """
-    # --- logging — quiet/one-shot paths mutate process-global logger state ---
-    logging.disable(logging.NOTSET)
-    for _logger_name in ("tools", "run_agent", "trajectory_compressor", "cron", "hermes_cli"):
-        _logger = logging.getLogger(_logger_name)
-        _logger.disabled = False
-        _logger.setLevel(logging.NOTSET)
-        _logger.propagate = True
-
     # --- tools.approval — the single biggest source of cross-test pollution ---
     try:
         from tools import approval as _approval_mod
@@ -397,26 +382,6 @@ def _reset_module_state():
     try:
         from tools import env_passthrough as _envp_mod
         _envp_mod._allowed_env_vars_var.set(set())
-    except Exception:
-        pass
-
-    # --- tools.terminal_tool — active environment/cwd cache ---
-    # File tools prefer a live terminal cwd when one is cached for the task.
-    # Clear terminal environments between tests so a prior terminal call can't
-    # override TERMINAL_CWD in path-resolution tests.
-    try:
-        from tools import terminal_tool as _term_mod
-        _envs_to_cleanup = []
-        with _term_mod._env_lock:
-            _envs_to_cleanup = list(_term_mod._active_environments.values())
-            _term_mod._active_environments.clear()
-            _term_mod._last_activity.clear()
-            _term_mod._creation_locks.clear()
-        for _env in _envs_to_cleanup:
-            try:
-                _env.cleanup()
-            except Exception:
-                pass
     except Exception:
         pass
 

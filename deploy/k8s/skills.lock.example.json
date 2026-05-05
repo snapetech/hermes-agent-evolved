@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "description": "Public-safe repo-backed skill seed manifest. Private pod-only skills are intentionally excluded.",
+  "skills": [
+    {
+      "name": "stack-cve-checkup",
+      "repo_path": "skills/security/stack-cve-checkup/SKILL.md",
+      "sha256": "bb273a5d6d34687c8743a69e602579baacba75374b4989994f9ff0f50f7d9eef"
+    },
+    {
+      "name": "hermes-introspection",
+      "repo_path": "skills/autonomous-ai-agents/hermes-introspection/SKILL.md",
+      "sha256": "c0eac3640f2ca261f6570c5c1114cb76ec4e585629ecb331facb9b73975b3105"
+    },
+    {
+      "name": "hermes-local-llm-nightly",
+      "repo_path": "skills/autonomous-ai-agents/hermes-local-llm-nightly/SKILL.md",
+      "sha256": "a11653d19d2b6af8dccf9aa831a5253d2fa2b1b8368e46e78f2b646c0b65b59c"
+    },
+    {
+      "name": "hermes-local-llm-promotion-handoff",
+      "repo_path": "skills/autonomous-ai-agents/hermes-local-llm-promotion-handoff/SKILL.md",
+      "sha256": "5ebb5eae53983efddc65d943e2a720103da7cca72f20a9be65d62f53045180c1"
+    },
+    {
+      "name": "putter",
+      "repo_path": "skills/autonomous-ai-agents/putter/SKILL.md",
+      "sha256": "2585c3ee08089723834d4260bcd87231bd37f263bc16770e9cd70fbc387587c6"
+    },
+    {
+      "name": "research-best-practices",
+      "repo_path": "skills/research/research-best-practices/SKILL.md",
+      "sha256": "e0352bb70850efde5f6f3cb81029ccec94603f3b3aa874e76d54e88177e6122d"
+    },
+    {
+      "name": "siem-review",
+      "repo_path": "skills/security/siem-review/SKILL.md",
+      "sha256": "b02e45a974fdadb32f519be62481dc52a6f0535ebd19c4bc876bb57a6cddfeb7"
+    }
+  ]
+}

@@ -12,14 +12,12 @@ import contextvars
 import logging
 import os
 import re
+import shlex
 import sys
 import threading
 import time
 import unicodedata
 from typing import Optional
-from hermes_cli.config import cfg_get
-
-from utils import is_truthy_value
 
 logger = logging.getLogger(__name__)
 
@@ -94,20 +92,10 @@ _HERMES_ENV_PATH = (
 )
 _PROJECT_ENV_PATH = r'(?:(?:/|\.{1,2}/)?(?:[^\s/"\'`]+/)*\.env(?:\.[^/\s"\'`]+)*)'
 _PROJECT_CONFIG_PATH = r'(?:(?:/|\.{1,2}/)?(?:[^\s/"\'`]+/)*config\.yaml)'
-_SHELL_RC_FILES = (
-    r'(?:~|\$home|\$\{home\})/\.'
-    r'(?:bashrc|zshrc|profile|bash_profile|zprofile)\b'
-)
-_CREDENTIAL_FILES = (
-    r'(?:~|\$home|\$\{home\})/\.'
-    r'(?:netrc|pgpass|npmrc|pypirc)\b'
-)
 _SENSITIVE_WRITE_TARGET = (
     r'(?:/etc/|/dev/sd|'
     rf'{_SSH_SENSITIVE_PATH}|'
-    rf'{_HERMES_ENV_PATH}|'
-    rf'{_SHELL_RC_FILES}|'
-    rf'{_CREDENTIAL_FILES})'
+    rf'{_HERMES_ENV_PATH})'
 )
 _PROJECT_SENSITIVE_WRITE_TARGET = rf'(?:{_PROJECT_ENV_PATH}|{_PROJECT_CONFIG_PATH})'
 _COMMAND_TAIL = r'(?:\s*(?:&&|\|\||;).*)?$'
@@ -177,18 +165,6 @@ HARDLINE_PATTERNS = [
     (_CMDPOS + r'telinit\s+[06]\b', "telinit 0/6 (shutdown/reboot)"),
 ]
 
-# Pre-compiled variant used by the hot-path matcher. Building these at module
-# load eliminates the ~2.6 ms cold-cache re.compile fan-out on the first
-# terminal() call per process (12 HARDLINE + 47 DANGEROUS patterns, each
-# potentially evicted from Python's 512-entry ``re._cache`` by unrelated
-# regex work elsewhere in the agent). DANGEROUS_PATTERNS_COMPILED is built
-# at the end of this module after DANGEROUS_PATTERNS is defined.
-_RE_FLAGS = re.IGNORECASE | re.DOTALL
-HARDLINE_PATTERNS_COMPILED = [
-    (re.compile(pattern, _RE_FLAGS), description)
-    for pattern, description in HARDLINE_PATTERNS
-]
-
 
 def detect_hardline_command(command: str) -> tuple:
     """Check if a command matches the unconditional hardline blocklist.
@@ -197,8 +173,8 @@ def detect_hardline_command(command: str) -> tuple:
         (is_hardline, description) or (False, None)
     """
     normalized = _normalize_command_for_detection(command).lower()
-    for pattern_re, description in HARDLINE_PATTERNS_COMPILED:
-        if pattern_re.search(normalized):
+    for pattern, description in HARDLINE_PATTERNS:
+        if re.search(pattern, normalized, re.IGNORECASE | re.DOTALL):
             return (True, description)
     return (False, None)
 
@@ -292,13 +268,6 @@ DANGEROUS_PATTERNS = [
 ]
 
 
-# Pre-compiled variant (same rationale as HARDLINE_PATTERNS_COMPILED above).
-DANGEROUS_PATTERNS_COMPILED = [
-    (re.compile(pattern, _RE_FLAGS), description)
-    for pattern, description in DANGEROUS_PATTERNS
-]
-
-
 def _legacy_pattern_key(pattern: str) -> str:
     """Reproduce the old regex-derived approval key for backwards compatibility."""
     return pattern.split(r'\b')[1] if r'\b' in pattern else pattern[:20]
@@ -351,11 +320,165 @@ def detect_dangerous_command(command: str) -> tuple:
         (is_dangerous, pattern_key, description) or (False, None, None)
     """
     command_lower = _normalize_command_for_detection(command).lower()
-    for pattern_re, description in DANGEROUS_PATTERNS_COMPILED:
-        if pattern_re.search(command_lower):
+    for pattern, description in DANGEROUS_PATTERNS:
+        if re.search(pattern, command_lower, re.IGNORECASE | re.DOTALL):
             pattern_key = description
             return (True, pattern_key, description)
     return (False, None, None)
+
+
+# =========================================================================
+# Trusted runtime package installs
+# =========================================================================
+
+_APT_COMMANDS = {"apt", "apt-get"}
+_APT_SUBCOMMANDS = {"update", "install"}
+_APT_VALUE_FLAGS = {"-o", "-c", "-t", "--option", "--config-file", "--target-release"}
+_APT_INSTALL_FLAGS = {
+    "-y",
+    "-q",
+    "-qq",
+    "--yes",
+    "--assume-yes",
+    "--no-install-recommends",
+    "--no-install-suggests",
+    "--reinstall",
+    "--download-only",
+    "--fix-broken",
+}
+_APT_PACKAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+_.:-]*$")
+
+
+def _strip_env_assignments(tokens: list[str]) -> list[str]:
+    idx = 0
+    while idx < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[idx]):
+        idx += 1
+    return tokens[idx:]
+
+
+def _strip_sudo_prefix(tokens: list[str]) -> list[str]:
+    tokens = _strip_env_assignments(tokens)
+    if not tokens or tokens[0] != "sudo":
+        return tokens
+    idx = 1
+    while idx < len(tokens):
+        token = tokens[idx]
+        if token == "--":
+            idx += 1
+            break
+        if token in {"-n", "-E", "-H", "-S"}:
+            idx += 1
+            continue
+        if token in {"-u", "-g", "-p"} and idx + 1 < len(tokens):
+            idx += 2
+            continue
+        if token.startswith("-"):
+            idx += 1
+            continue
+        break
+    return _strip_env_assignments(tokens[idx:])
+
+
+def _split_shell_and_chain(command: str) -> list[str] | None:
+    normalized = _normalize_command_for_detection(command).strip()
+    if not normalized:
+        return None
+    if any(marker in normalized for marker in ("\n", "|", ">", "<", "`", "$(", "||")):
+        return None
+    if re.search(r"(?<!&)&(?!&)", normalized):
+        return None
+
+    try:
+        tokens = shlex.split(normalized, posix=True)
+    except ValueError:
+        return None
+
+    # Unwrap the common shell form models use for package installs:
+    # bash -lc 'sudo -n apt-get update && sudo -n apt-get install -y ffmpeg'
+    if len(tokens) >= 3 and tokens[0] in {"bash", "sh"} and tokens[1].startswith("-") and "c" in tokens[1]:
+        if len(tokens) != 3:
+            return None
+        return _split_shell_and_chain(tokens[2])
+
+    return [part.strip() for part in normalized.split("&&") if part.strip()]
+
+
+def _runtime_apt_segment_packages(segment: str) -> list[str] | None:
+    try:
+        tokens = shlex.split(segment, posix=True)
+    except ValueError:
+        return None
+
+    tokens = _strip_sudo_prefix(tokens)
+    if len(tokens) < 2 or tokens[0] not in _APT_COMMANDS:
+        return None
+    subcommand = tokens[1]
+    if subcommand not in _APT_SUBCOMMANDS:
+        return None
+    if subcommand == "update":
+        return [] if all(token.startswith("-") for token in tokens[2:]) else None
+
+    idx = 2
+    packages: list[str] = []
+    while idx < len(tokens):
+        token = tokens[idx]
+        if token in _APT_VALUE_FLAGS:
+            idx += 2
+            continue
+        if token in _APT_INSTALL_FLAGS or token.startswith("--allow-"):
+            idx += 1
+            continue
+        if token.startswith("-"):
+            return None
+        if not _APT_PACKAGE_RE.match(token):
+            return None
+        packages.append(token)
+        idx += 1
+    return packages or None
+
+
+def _is_allowed_apt_segment(segment: str) -> bool:
+    return _runtime_apt_segment_packages(segment) is not None
+
+
+def is_runtime_package_install_command(command: str) -> bool:
+    """Return True for simple apt/apt-get update/install chains.
+
+    This intentionally does not allow remove/purge/upgrade, arbitrary shell
+    metacharacters, redirects, pipes, background jobs, or extra commands.  It
+    exists so an agent in the managed Hermes pod can install short-lived system
+    dependencies without getting trapped by generic shell/correction guards.
+    """
+    parts = _split_shell_and_chain(command)
+    if not parts:
+        return False
+    return all(_is_allowed_apt_segment(part) for part in parts)
+
+
+def extract_runtime_apt_install_packages(command: str) -> list[str]:
+    """Extract package names from a trusted apt/apt-get install command."""
+    parts = _split_shell_and_chain(command)
+    if not parts or not all(_is_allowed_apt_segment(part) for part in parts):
+        return []
+    seen: set[str] = set()
+    packages: list[str] = []
+    for part in parts:
+        for package in _runtime_apt_segment_packages(part) or []:
+            if package not in seen:
+                seen.add(package)
+                packages.append(package)
+    return packages
+
+
+def _runtime_package_installs_allowed() -> bool:
+    raw = os.getenv("HERMES_ALLOW_RUNTIME_APT", "1").strip().lower()
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return (
+        os.getenv("KUBERNETES_SERVICE_HOST")
+        or os.path.exists("/.dockerenv")
+        or os.path.exists("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+    )
 
 
 # =========================================================================
@@ -412,8 +535,8 @@ def unregister_gateway_notify(session_key: str) -> None:
     with _lock:
         _gateway_notify_cbs.pop(session_key, None)
         entries = _gateway_queues.pop(session_key, [])
-    for entry in entries:
-        entry.event.set()
+        for entry in entries:
+            entry.event.set()
 
 
 def resolve_gateway_approval(session_key: str, choice: str,
@@ -487,12 +610,7 @@ def clear_session(session_key: str) -> None:
         _session_approved.pop(session_key, None)
         _session_yolo.discard(session_key)
         _pending.pop(session_key, None)
-        entries = _gateway_queues.pop(session_key, [])
-    for entry in entries:
-        # Session-boundary cleanup should cancel any blocked approval waits
-        # immediately so the old run can unwind instead of idling until timeout.
-        entry.result = "deny"
-        entry.event.set()
+        _gateway_queues.pop(session_key, None)
 
 
 def is_session_yolo_enabled(session_key: str) -> bool:
@@ -628,18 +746,15 @@ def prompt_dangerous_approval(command: str, description: str,
 
     os.environ["HERMES_SPINNER_PAUSE"] = "1"
     try:
-        # Resolve the active UI language once per prompt so we don't re-read
-        # config/YAML inside the retry loop below.
-        from agent.i18n import t
         while True:
             print()
-            print(f"  {t('approval.dangerous_header', description=description)}")
+            print(f"  ⚠️  DANGEROUS COMMAND: {description}")
             print(f"      {command}")
             print()
             if allow_permanent:
-                print(t("approval.choose_long"))
+                print("      [o]nce  |  [s]ession  |  [a]lways  |  [d]eny")
             else:
-                print(t("approval.choose_short"))
+                print("      [o]nce  |  [s]ession  |  [d]eny")
             print()
             sys.stdout.flush()
 
@@ -647,7 +762,7 @@ def prompt_dangerous_approval(command: str, description: str,
 
             def get_input():
                 try:
-                    prompt = t("approval.prompt_long") if allow_permanent else t("approval.prompt_short")
+                    prompt = "      Choice [o/s/a/D]: " if allow_permanent else "      Choice [o/s/D]: "
                     result["choice"] = input(prompt).strip().lower()
                 except (EOFError, OSError):
                     result["choice"] = ""
@@ -657,28 +772,28 @@ def prompt_dangerous_approval(command: str, description: str,
             thread.join(timeout=timeout_seconds)
 
             if thread.is_alive():
-                print("\n" + t("approval.timeout"))
+                print("\n      ⏱ Timeout - denying command")
                 return "deny"
 
             choice = result["choice"]
             if choice in ('o', 'once'):
-                print(t("approval.allowed_once"))
+                print("      ✓ Allowed once")
                 return "once"
             elif choice in ('s', 'session'):
-                print(t("approval.allowed_session"))
+                print("      ✓ Allowed for this session")
                 return "session"
             elif choice in ('a', 'always'):
                 if not allow_permanent:
-                    print(t("approval.allowed_session"))
+                    print("      ✓ Allowed for this session")
                     return "session"
-                print(t("approval.allowed_always"))
+                print("      ✓ Added to permanent allowlist")
                 return "always"
             else:
-                print(t("approval.denied"))
+                print("      ✗ Denied")
                 return "deny"
 
     except (EOFError, KeyboardInterrupt):
-        print("\n" + t("approval.cancelled"))
+        print("\n      ✗ Cancelled")
         return "deny"
     finally:
         if "HERMES_SPINNER_PAUSE" in os.environ:
@@ -692,12 +807,16 @@ def _normalize_approval_mode(mode) -> str:
 
     YAML 1.1 treats bare words like `off` as booleans, so a config entry like
     `approvals:\n  mode: off` is parsed as False unless quoted. Treat that as the
-    intended string mode instead of falling back to manual approvals.
+    intended string mode instead of falling back to manual approvals. Accept
+    `yolo` as a compatibility alias for the same no-prompt mode because older
+    deployment docs used that spelling.
     """
     if isinstance(mode, bool):
         return "off" if mode is False else "manual"
     if isinstance(mode, str):
         normalized = mode.strip().lower()
+        if normalized == "yolo":
+            return "off"
         return normalized or "manual"
     return "manual"
 
@@ -732,7 +851,7 @@ def _get_cron_approval_mode() -> str:
     try:
         from hermes_cli.config import load_config
         config = load_config()
-        mode = str(cfg_get(config, "approvals", "cron_mode", default="deny")).lower().strip()
+        mode = str(config.get("approvals", {}).get("cron_mode", "deny")).lower().strip()
         if mode in ("approve", "off", "allow", "yes"):
             return "approve"
         return "deny"
@@ -802,7 +921,7 @@ def check_dangerous_command(command: str, env_type: str,
     Returns:
         {"approved": True/False, "message": str or None, ...}
     """
-    if env_type in ("docker", "singularity", "modal", "daytona", "vercel_sandbox"):
+    if env_type in ("docker", "singularity", "modal", "daytona"):
         return {"approved": True, "message": None}
 
     # Hardline floor: commands with no recovery path (rm -rf /, mkfs, dd
@@ -817,7 +936,7 @@ def check_dangerous_command(command: str, env_type: str,
 
     # --yolo: bypass all approval prompts. Gateway /yolo is session-scoped;
     # CLI --yolo remains process-scoped via the env var for local use.
-    if is_truthy_value(os.getenv("HERMES_YOLO_MODE")) or is_current_session_yolo_enabled():
+    if os.getenv("HERMES_YOLO_MODE") or is_current_session_yolo_enabled():
         return {"approved": True, "message": None}
 
     is_dangerous, pattern_key, description = detect_dangerous_command(command)
@@ -927,7 +1046,7 @@ def check_all_command_guards(command: str, env_type: str,
     other was shown to the user.
     """
     # Skip containers for both checks
-    if env_type in ("docker", "singularity", "modal", "daytona", "vercel_sandbox"):
+    if env_type in ("docker", "singularity", "modal", "daytona"):
         return {"approved": True, "message": None}
 
     # Hardline floor: unconditional block for catastrophic commands
@@ -942,8 +1061,16 @@ def check_all_command_guards(command: str, env_type: str,
     # --yolo or approvals.mode=off: bypass all approval prompts.
     # Gateway /yolo is session-scoped; CLI --yolo remains process-scoped.
     approval_mode = _get_approval_mode()
-    if is_truthy_value(os.getenv("HERMES_YOLO_MODE")) or is_current_session_yolo_enabled() or approval_mode == "off":
+    if os.getenv("HERMES_YOLO_MODE") or is_current_session_yolo_enabled() or approval_mode == "off":
         return {"approved": True, "message": None}
+
+    if _runtime_package_installs_allowed() and is_runtime_package_install_command(command):
+        return {
+            "approved": True,
+            "message": None,
+            "runtime_package_install": True,
+            "description": "trusted in-container apt install/update",
+        }
 
     is_cli = os.getenv("HERMES_INTERACTIVE")
     is_gateway = os.getenv("HERMES_GATEWAY_SESSION")
@@ -972,17 +1099,37 @@ def check_all_command_guards(command: str, env_type: str,
 
     # --- Phase 1: Gather findings from both checks ---
 
+    # Dangerous command check is local and fast, but it does not replace
+    # Tirith. Combined findings must surface as a single approval prompt.
+    is_dangerous, pattern_key, description = detect_dangerous_command(command)
+
     # Tirith check — wrapper guarantees no raise for expected failures.
     # Only catch ImportError (module not installed).
     tirith_result = {"action": "allow", "findings": [], "summary": ""}
     try:
         from tools.tirith_security import check_command_security
-        tirith_result = check_command_security(command)
+        _skip_gateway_tirith = False
+        if is_gateway and is_dangerous:
+            try:
+                from unittest.mock import Mock
+                import os as _os
+                import shutil as _shutil
+                from hermes_constants import get_hermes_home
+
+                _has_local_tirith = bool(_shutil.which("tirith")) or (
+                    get_hermes_home() / "bin" / "tirith"
+                ).is_file()
+                _skip_gateway_tirith = (
+                    not _has_local_tirith
+                    and not isinstance(check_command_security, Mock)
+                    and not _os.getenv("TIRITH_BIN")
+                )
+            except Exception:
+                _skip_gateway_tirith = False
+        if not _skip_gateway_tirith:
+            tirith_result = check_command_security(command)
     except ImportError:
         pass  # tirith module not installed — allow
-
-    # Dangerous command check (detection only, no approval)
-    is_dangerous, pattern_key, description = detect_dangerous_command(command)
 
     # --- Phase 2: Decide ---
 

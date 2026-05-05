@@ -15,7 +15,6 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from hermes_cli.profiles import (
-    normalize_profile_name,
     validate_profile_name,
     get_profile_dir,
     create_profile,
@@ -59,24 +58,6 @@ def profile_env(tmp_path, monkeypatch):
 # TestValidateProfileName
 # ===================================================================
 
-class TestNormalizeProfileName:
-    """Tests for normalize_profile_name()."""
-
-    def test_title_case_normalized(self):
-        assert normalize_profile_name("Jules") == "jules"
-        assert normalize_profile_name("  Librarian ") == "librarian"
-
-    def test_default_case_insensitive(self):
-        assert normalize_profile_name("Default") == "default"
-        assert normalize_profile_name("DEFAULT") == "default"
-
-    def test_empty_raises(self):
-        with pytest.raises(ValueError, match="cannot be empty"):
-            normalize_profile_name("")
-        with pytest.raises(ValueError, match="cannot be empty"):
-            normalize_profile_name("   ")
-
-
 class TestValidateProfileName:
     """Tests for validate_profile_name()."""
 
@@ -84,11 +65,6 @@ class TestValidateProfileName:
     def test_valid_names_accepted(self, name):
         # Should not raise
         validate_profile_name(name)
-
-    def test_uppercase_rejected(self):
-        # validate_profile_name is strict — callers normalize first, then validate.
-        with pytest.raises(ValueError):
-            validate_profile_name("Jules")
 
     @pytest.mark.parametrize("name", ["UPPER", "has space", ".hidden", "-leading"])
     def test_invalid_names_rejected(self, name):
@@ -130,10 +106,6 @@ class TestGetProfileDir:
         tmp_path = profile_env
         result = get_profile_dir("coder")
         assert result == tmp_path / ".hermes" / "profiles" / "coder"
-
-    def test_named_profile_matching_is_case_insensitive(self, profile_env):
-        tmp_path = profile_env
-        assert get_profile_dir("Coder") == tmp_path / ".hermes" / "profiles" / "coder"
 
 
 # ===================================================================
@@ -177,23 +149,6 @@ class TestCreateProfile:
         assert (profile_dir / ".env").read_text() == "KEY=val"
         assert (profile_dir / "SOUL.md").read_text() == "Be helpful."
 
-    def test_clone_config_copies_source_skills(self, profile_env):
-        tmp_path = profile_env
-        default_home = tmp_path / ".hermes"
-        skill_dir = default_home / "skills" / "custom" / "installed-skill"
-        skill_dir.mkdir(parents=True)
-        (skill_dir / "SKILL.md").write_text("---\nname: installed-skill\n---\n")
-
-        profile_dir = create_profile("coder", clone_config=True, no_alias=True)
-
-        assert (
-            profile_dir
-            / "skills"
-            / "custom"
-            / "installed-skill"
-            / "SKILL.md"
-        ).read_text() == "---\nname: installed-skill\n---\n"
-
     def test_clone_all_copies_entire_tree(self, profile_env):
         tmp_path = profile_env
         default_home = tmp_path / ".hermes"
@@ -215,23 +170,6 @@ class TestCreateProfile:
         assert not (profile_dir / "gateway.pid").exists()
         assert not (profile_dir / "gateway_state.json").exists()
         assert not (profile_dir / "processes.json").exists()
-
-    def test_clone_all_excludes_sibling_profiles_tree(self, profile_env):
-        """--clone-all from default ~/.hermes must not copy profiles/* (nested explosion)."""
-        tmp_path = profile_env
-        default_home = tmp_path / ".hermes"
-        profiles_root = default_home / "profiles"
-        profiles_root.mkdir(exist_ok=True)
-        (profiles_root / "other").mkdir(parents=True, exist_ok=True)
-        (profiles_root / "other" / "marker.txt").write_text("sibling data")
-
-        (default_home / "memories").mkdir(exist_ok=True)
-        (default_home / "memories" / "note.md").write_text("remember this")
-
-        profile_dir = create_profile("coder", clone_all=True, no_alias=True)
-
-        assert (profile_dir / "memories" / "note.md").read_text() == "remember this"
-        assert not (profile_dir / "profiles").exists()
 
     def test_clone_config_missing_files_skipped(self, profile_env):
         """Clone config gracefully skips files that don't exist in source."""

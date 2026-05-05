@@ -5,9 +5,11 @@ Allows users to interact with Hermes by sending emails.
 Uses IMAP to receive and SMTP to send messages.
 
 Environment variables:
-    EMAIL_IMAP_HOST     — IMAP server host (e.g., imap.gmail.com)
+    EMAIL_IMAP_HOST     — IMAP server host
     EMAIL_IMAP_PORT     — IMAP server port (default: 993)
-    EMAIL_SMTP_HOST     — SMTP server host (e.g., smtp.gmail.com)
+    EMAIL_IMAP_SECURITY — IMAP transport: ssl, starttls, or plain (default: ssl)
+                          Proton Mail inbound normally requires Proton Bridge.
+    EMAIL_SMTP_HOST     — SMTP server host
     EMAIL_SMTP_PORT     — SMTP server port (default: 587)
     EMAIL_ADDRESS       — Email address for the agent
     EMAIL_PASSWORD      — Email password or app-specific password
@@ -31,7 +33,7 @@ from email.mime.base import MIMEBase
 from email.utils import formatdate
 from email import encoders
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from gateway.platforms.base import (
     BasePlatformAdapter,
@@ -59,7 +61,7 @@ _AUTOMATED_HEADERS = {
     "List-Unsubscribe": lambda v: bool(v),
 }
 
-# Gmail-safe max length per email body
+# Provider-safe max length per email body
 MAX_MESSAGE_LENGTH = 50_000
 
 # Supported image extensions for inline detection
@@ -229,6 +231,13 @@ class EmailAdapter(BasePlatformAdapter):
         self._password = os.getenv("EMAIL_PASSWORD", "")
         self._imap_host = os.getenv("EMAIL_IMAP_HOST", "")
         self._imap_port = int(os.getenv("EMAIL_IMAP_PORT", "993"))
+        self._imap_security = os.getenv("EMAIL_IMAP_SECURITY", "ssl").strip().lower() or "ssl"
+        if self._imap_security not in {"ssl", "starttls", "plain"}:
+            logger.warning(
+                "[Email] Unknown EMAIL_IMAP_SECURITY=%r; using ssl",
+                self._imap_security,
+            )
+            self._imap_security = "ssl"
         self._smtp_host = os.getenv("EMAIL_SMTP_HOST", "")
         self._smtp_port = int(os.getenv("EMAIL_SMTP_PORT", "587"))
         self._poll_interval = int(os.getenv("EMAIL_POLL_INTERVAL", "15"))
@@ -249,6 +258,16 @@ class EmailAdapter(BasePlatformAdapter):
         self._thread_context: Dict[str, Dict[str, str]] = {}
 
         logger.info("[Email] Adapter initialized for %s", self._address)
+
+    def _connect_imap(self):
+        """Open an IMAP connection using the configured transport security."""
+        if self._imap_security == "ssl":
+            return imaplib.IMAP4_SSL(self._imap_host, self._imap_port, timeout=30)
+
+        imap = imaplib.IMAP4(self._imap_host, self._imap_port, timeout=30)
+        if self._imap_security == "starttls":
+            imap.starttls(ssl_context=ssl.create_default_context())
+        return imap
 
     def _trim_seen_uids(self) -> None:
         """Keep only the most recent UIDs to prevent unbounded memory growth.
@@ -274,7 +293,7 @@ class EmailAdapter(BasePlatformAdapter):
         """Connect to the IMAP server and start polling for new messages."""
         try:
             # Test IMAP connection
-            imap = imaplib.IMAP4_SSL(self._imap_host, self._imap_port, timeout=30)
+            imap = self._connect_imap()
             imap.login(self._address, self._password)
             # Mark all existing messages as seen so we only process new ones
             imap.select("INBOX")
@@ -341,7 +360,7 @@ class EmailAdapter(BasePlatformAdapter):
         """Fetch new (unseen) messages from IMAP. Runs in executor thread."""
         results = []
         try:
-            imap = imaplib.IMAP4_SSL(self._imap_host, self._imap_port, timeout=30)
+            imap = self._connect_imap()
             try:
                 imap.login(self._address, self._password)
                 imap.select("INBOX")
@@ -415,18 +434,6 @@ class EmailAdapter(BasePlatformAdapter):
         if _is_automated_sender(sender_addr, {}):
             logger.debug("[Email] Dropping automated sender at dispatch: %s", sender_addr)
             return
-
-        # Skip senders not in EMAIL_ALLOWED_USERS — prevents the adapter
-        # from creating a MessageEvent (and thus thread context) for senders
-        # that the gateway will never authorize.  Without this early guard,
-        # a race between dispatch and authorization can result in the adapter
-        # sending a reply even though the handler returned None.
-        allowed_raw = os.getenv("EMAIL_ALLOWED_USERS", "").strip()
-        if allowed_raw:
-            allowed = {addr.strip().lower() for addr in allowed_raw.split(",") if addr.strip()}
-            if sender_addr.lower() not in allowed:
-                logger.debug("[Email] Dropping non-allowlisted sender at dispatch: %s", sender_addr)
-                return
 
         subject = msg_data["subject"]
         body = msg_data["body"].strip()
@@ -551,113 +558,6 @@ class EmailAdapter(BasePlatformAdapter):
         text = caption or ""
         text += f"\n\nImage: {image_url}"
         return await self.send(chat_id, text.strip(), reply_to)
-
-    async def send_multiple_images(
-        self,
-        chat_id: str,
-        images: List[Tuple[str, str]],
-        metadata: Optional[Dict[str, Any]] = None,
-        human_delay: float = 0.0,
-    ) -> None:
-        """Send a batch of images as a single email with multiple MIME attachments.
-
-        Local files are attached directly. URL images have their URL
-        appended to the body (email adapter does not download remote
-        images). No hard cap — email clients handle dozens of
-        attachments fine, subject to SMTP message size limits.
-        """
-        if not images:
-            return
-
-        from urllib.parse import unquote as _unquote
-
-        body_parts: List[str] = []
-        local_paths: List[str] = []
-        for image_url, alt_text in images:
-            if alt_text:
-                body_parts.append(alt_text)
-            if image_url.startswith("file://"):
-                local_path = _unquote(image_url[7:])
-                if Path(local_path).exists():
-                    local_paths.append(local_path)
-                else:
-                    logger.warning("[Email] Skipping missing image: %s", local_path)
-            else:
-                # Remote URLs just get linked in the body (parity with send_image)
-                body_parts.append(f"Image: {image_url}")
-
-        if not local_paths and not body_parts:
-            return
-
-        body = "\n\n".join(body_parts)
-
-        try:
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(
-                None,
-                self._send_email_with_attachments,
-                chat_id,
-                body,
-                local_paths,
-            )
-        except Exception as e:
-            logger.error("[Email] Multi-image send failed, falling back: %s", e, exc_info=True)
-            await super().send_multiple_images(chat_id, images, metadata, human_delay)
-
-    def _send_email_with_attachments(
-        self,
-        to_addr: str,
-        body: str,
-        file_paths: List[str],
-    ) -> str:
-        """Send an email with multiple file attachments via SMTP."""
-        msg = MIMEMultipart()
-        msg["From"] = self._address
-        msg["To"] = to_addr
-
-        ctx = self._thread_context.get(to_addr, {})
-        subject = ctx.get("subject", "Hermes Agent")
-        if not subject.startswith("Re:"):
-            subject = f"Re: {subject}"
-        msg["Subject"] = subject
-
-        original_msg_id = ctx.get("message_id")
-        if original_msg_id:
-            msg["In-Reply-To"] = original_msg_id
-            msg["References"] = original_msg_id
-
-        msg["Date"] = formatdate(localtime=True)
-        msg_id = f"<hermes-{uuid.uuid4().hex[:12]}@{self._address.split('@')[1]}>"
-        msg["Message-ID"] = msg_id
-
-        if body:
-            msg.attach(MIMEText(body, "plain", "utf-8"))
-
-        for file_path in file_paths:
-            p = Path(file_path)
-            try:
-                with open(p, "rb") as f:
-                    part = MIMEBase("application", "octet-stream")
-                    part.set_payload(f.read())
-                    encoders.encode_base64(part)
-                    part.add_header("Content-Disposition", f"attachment; filename={p.name}")
-                    msg.attach(part)
-            except Exception as e:
-                logger.warning("[Email] Failed to attach %s: %s", file_path, e)
-
-        smtp = smtplib.SMTP(self._smtp_host, self._smtp_port, timeout=30)
-        try:
-            smtp.starttls(context=ssl.create_default_context())
-            smtp.login(self._address, self._password)
-            smtp.send_message(msg)
-        finally:
-            try:
-                smtp.quit()
-            except Exception:
-                smtp.close()
-
-        logger.info("[Email] Sent multi-attachment email to %s (%d files)", to_addr, len(file_paths))
-        return msg_id
 
     async def send_document(
         self,

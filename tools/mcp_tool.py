@@ -251,6 +251,10 @@ _MAX_BACKOFF_SECONDS = 60
 # Environment variables that are safe to pass to stdio subprocesses
 _SAFE_ENV_KEYS = frozenset({
     "PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "SHELL", "TMPDIR",
+    # Desktop/session handles are not credentials. Stdio MCP servers that
+    # automate or inspect the local desktop need them to reach the compositor.
+    "DISPLAY", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS",
+    "XAUTHORITY",
 })
 
 # Regex for credential patterns to strip from error messages
@@ -915,12 +919,11 @@ class MCPServerTask:
         except Exception:
             logger.exception("MCP server '%s': dynamic tool refresh failed", self.name)
 
-    def _schedule_tools_refresh(self) -> asyncio.Task:
+    def _schedule_tools_refresh(self) -> None:
         """Schedule a background tool refresh and keep it strongly referenced."""
         task = asyncio.create_task(self._refresh_tools_task())
         self._pending_refresh_tasks.add(task)
         task.add_done_callback(self._pending_refresh_tasks.discard)
-        return task
 
     def _make_message_handler(self):
         """Build a ``message_handler`` callback for ``ClientSession``.
@@ -951,10 +954,6 @@ class MCPServerTask:
                             # a separate task and let the handler return
                             # promptly.
                             self._schedule_tools_refresh()
-                            # Yield one loop tick so tests and short-lived
-                            # notification contexts can observe the scheduled
-                            # refresh without awaiting the full server RPC.
-                            await asyncio.sleep(0)
                         case PromptListChangedNotification():
                             logger.debug("MCP server '%s': prompts/list_changed (ignored)", self.name)
                         case ResourceListChangedNotification():
@@ -1038,43 +1037,14 @@ class MCPServerTask:
                         with a fresh signal.
 
         Shutdown takes precedence if both events are set simultaneously.
-
-        Periodically sends a lightweight keepalive (``list_tools``) to
-        prevent TCP connections from going stale during long idle
-        periods (#17003).  If the keepalive fails, triggers a reconnect.
         """
-        # Keepalive interval in seconds.  Must be shorter than typical
-        # LB / NAT idle-timeout (commonly 300-600s).
-        _KEEPALIVE_INTERVAL = 180  # 3 minutes
-
         shutdown_task = asyncio.create_task(self._shutdown_event.wait())
         reconnect_task = asyncio.create_task(self._reconnect_event.wait())
         try:
-            while True:
-                done, _pending = await asyncio.wait(
-                    {shutdown_task, reconnect_task},
-                    timeout=_KEEPALIVE_INTERVAL,
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                if done:
-                    break
-
-                # Timeout — no lifecycle event fired.  Send a keepalive
-                # to exercise the connection and detect stale sockets.
-                if self.session:
-                    try:
-                        await asyncio.wait_for(
-                            self.session.list_tools(),
-                            timeout=30.0,
-                        )
-                    except Exception as exc:
-                        logger.warning(
-                            "MCP server '%s' keepalive failed, "
-                            "triggering reconnect: %s",
-                            self.name, exc,
-                        )
-                        self._reconnect_event.set()
-                        break
+            await asyncio.wait(
+                {shutdown_task, reconnect_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
         finally:
             for t in (shutdown_task, reconnect_task):
                 if not t.done():
@@ -1696,7 +1666,6 @@ _SESSION_EXPIRED_MARKERS: tuple = (
     "session expired",
     "session not found",
     "unknown session",
-    "session terminated",
 )
 
 
@@ -3125,6 +3094,9 @@ def _kill_orphaned_mcp_children(include_active: bool = False) -> None:
 
     # Fast path: no tracked stdio PIDs to reap. Skip the SIGTERM/sleep/SIGKILL
     # dance entirely — otherwise every MCP-free shutdown pays a 2s sleep tax.
+    if not pids:
+        return
+
     if not pids:
         return
 

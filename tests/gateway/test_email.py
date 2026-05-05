@@ -90,6 +90,76 @@ class TestCheckRequirements(unittest.TestCase):
         self.assertFalse(check_email_requirements())
 
 
+class TestImapSecurityModes(unittest.TestCase):
+    """Verify IMAP transport selection."""
+
+    def _make_adapter(self, security=None, port="993"):
+        from gateway.config import PlatformConfig
+        from gateway.platforms.email import EmailAdapter
+
+        env = {
+            "EMAIL_ADDRESS": "hermes@test.com",
+            "EMAIL_PASSWORD": "secret",
+            "EMAIL_IMAP_HOST": "imap.test.com",
+            "EMAIL_IMAP_PORT": port,
+            "EMAIL_SMTP_HOST": "smtp.test.com",
+        }
+        if security is not None:
+            env["EMAIL_IMAP_SECURITY"] = security
+
+        with patch.dict(os.environ, env, clear=False):
+            return EmailAdapter(PlatformConfig(enabled=True))
+
+    def test_default_uses_imap_ssl(self):
+        adapter = self._make_adapter()
+        mock_imap = MagicMock()
+
+        with patch("imaplib.IMAP4_SSL", return_value=mock_imap) as imap_ssl, \
+                patch("imaplib.IMAP4") as imap_plain:
+            result = adapter._connect_imap()
+
+        imap_ssl.assert_called_once_with("imap.test.com", 993, timeout=30)
+        imap_plain.assert_not_called()
+        self.assertIs(result, mock_imap)
+
+    def test_starttls_uses_plain_connection_then_starttls(self):
+        adapter = self._make_adapter(security="starttls", port="1143")
+        mock_imap = MagicMock()
+
+        with patch("imaplib.IMAP4", return_value=mock_imap) as imap_plain, \
+                patch("imaplib.IMAP4_SSL") as imap_ssl:
+            result = adapter._connect_imap()
+
+        imap_plain.assert_called_once_with("imap.test.com", 1143, timeout=30)
+        mock_imap.starttls.assert_called_once()
+        imap_ssl.assert_not_called()
+        self.assertIs(result, mock_imap)
+
+    def test_plain_uses_plain_connection_without_starttls(self):
+        adapter = self._make_adapter(security="plain", port="1143")
+        mock_imap = MagicMock()
+
+        with patch("imaplib.IMAP4", return_value=mock_imap) as imap_plain, \
+                patch("imaplib.IMAP4_SSL") as imap_ssl:
+            result = adapter._connect_imap()
+
+        imap_plain.assert_called_once_with("imap.test.com", 1143, timeout=30)
+        mock_imap.starttls.assert_not_called()
+        imap_ssl.assert_not_called()
+        self.assertIs(result, mock_imap)
+
+    def test_invalid_security_falls_back_to_ssl(self):
+        adapter = self._make_adapter(security="bogus")
+        mock_imap = MagicMock()
+
+        with patch("imaplib.IMAP4_SSL", return_value=mock_imap) as imap_ssl:
+            result = adapter._connect_imap()
+
+        self.assertEqual(adapter._imap_security, "ssl")
+        imap_ssl.assert_called_once_with("imap.test.com", 993, timeout=30)
+        self.assertIs(result, mock_imap)
+
+
 class TestHelperFunctions(unittest.TestCase):
     """Test email parsing helper functions."""
 
@@ -424,91 +494,6 @@ class TestDispatchMessage(unittest.TestCase):
         self.assertEqual(event.source.user_id, "john@example.com")
         self.assertEqual(event.source.user_name, "John Doe")
         self.assertEqual(event.source.chat_type, "dm")
-
-    def test_non_allowlisted_sender_dropped(self):
-        """Senders not in EMAIL_ALLOWED_USERS should be dropped before dispatch."""
-        import asyncio
-        with patch.dict(os.environ, {
-            "EMAIL_ALLOWED_USERS": "hermes@test.com,admin@test.com",
-        }):
-            adapter = self._make_adapter()
-            adapter._message_handler = MagicMock()
-
-            msg_data = {
-                "uid": b"99",
-                "sender_addr": "outsider@evil.com",
-                "sender_name": "Spammer",
-                "subject": "Buy now!!!",
-                "message_id": "<spam@evil.com>",
-                "in_reply_to": "",
-                "body": "Cheap meds",
-                "attachments": [],
-                "date": "",
-            }
-
-            asyncio.run(adapter._dispatch_message(msg_data))
-            # Handler should NOT be called for non-allowlisted sender
-            adapter._message_handler.assert_not_called()
-            # Thread context should NOT be created
-            self.assertNotIn("outsider@evil.com", adapter._thread_context)
-
-    def test_allowlisted_sender_proceeds(self):
-        """Senders in EMAIL_ALLOWED_USERS should proceed to dispatch normally."""
-        import asyncio
-        with patch.dict(os.environ, {
-            "EMAIL_ALLOWED_USERS": "hermes@test.com,admin@test.com",
-        }):
-            adapter = self._make_adapter()
-            captured_events = []
-
-            async def mock_handler(event):
-                captured_events.append(event)
-                return None
-
-            adapter._message_handler = mock_handler
-
-            msg_data = {
-                "uid": b"100",
-                "sender_addr": "admin@test.com",
-                "sender_name": "Admin",
-                "subject": "Important",
-                "message_id": "<msg@test.com>",
-                "in_reply_to": "",
-                "body": "Hello",
-                "attachments": [],
-                "date": "",
-            }
-
-            asyncio.run(adapter._dispatch_message(msg_data))
-            self.assertEqual(len(captured_events), 1)
-            self.assertEqual(captured_events[0].source.chat_id, "admin@test.com")
-
-    def test_empty_allowlist_allows_all(self):
-        """When EMAIL_ALLOWED_USERS is not set, all senders should proceed."""
-        import asyncio
-        with patch.dict(os.environ, {}, clear=False):
-            # Ensure EMAIL_ALLOWED_USERS is not in the env
-            if "EMAIL_ALLOWED_USERS" in os.environ:
-                del os.environ["EMAIL_ALLOWED_USERS"]
-
-            adapter = self._make_adapter()
-            adapter._message_handler = MagicMock()
-
-            msg_data = {
-                "uid": b"101",
-                "sender_addr": "anyone@test.com",
-                "sender_name": "Anyone",
-                "subject": "Hey",
-                "message_id": "<any@test.com>",
-                "in_reply_to": "",
-                "body": "Hi",
-                "attachments": [],
-                "date": "",
-            }
-
-            asyncio.run(adapter._dispatch_message(msg_data))
-            # Handler should be called when no allowlist is configured
-            adapter._message_handler.assert_called()
 
 
 class TestThreadContext(unittest.TestCase):

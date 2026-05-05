@@ -11,7 +11,7 @@ zero migration needed.
 Usage::
 
     hermes profile create coder          # fresh profile + bundled skills
-    hermes profile create coder --clone  # also copy config, .env, SOUL.md, skills
+    hermes profile create coder --clone  # also copy config, .env, SOUL.md
     hermes profile create coder --clone-all  # full copy of source profile
     coder chat                           # use via wrapper alias
     hermes -p coder chat                 # or via flag
@@ -70,29 +70,6 @@ _CLONE_ALL_STRIP = [
     "gateway_state.json",
     "processes.json",
 ]
-
-
-def _clone_all_copytree_ignore(source_dir: Path):
-    """Ignore ``profiles/`` at the root of *source_dir* only.
-
-    ``~/.hermes`` contains ``profiles/<name>/`` for sibling named profiles.
-    ``shutil.copytree`` would otherwise duplicate that entire tree inside the
-    new profile (recursive ``.../profiles/.../profiles/...``). Export already
-    excludes ``profiles`` via ``_DEFAULT_EXPORT_EXCLUDE_ROOT`` — match that
-    behavior for ``--clone-all``.
-    """
-    source_resolved = source_dir.resolve()
-
-    def _ignore(directory: str, names: List[str]) -> List[str]:
-        try:
-            if Path(directory).resolve() == source_resolved:
-                return [n for n in names if n == "profiles"]
-        except (OSError, ValueError):
-            pass
-        return []
-
-    return _ignore
-
 
 # Directories/files to exclude when exporting the default (~/.hermes) profile.
 # The default profile contains infrastructure (repo checkout, worktrees, DBs,
@@ -179,33 +156,8 @@ def _get_wrapper_dir() -> Path:
 # Validation
 # ---------------------------------------------------------------------------
 
-def normalize_profile_name(name: str) -> str:
-    """Return the canonical profile id used on disk and in CLI ``-p`` argv.
-
-    Named profiles are stored lowercase under ``profiles/<id>/``. The special
-    alias ``default`` is matched case-insensitively (``Default`` → ``default``).
-    Dashboards and tools may pass title-cased display labels; normalize before
-    validation, assignment, and subprocess spawn (see issue #18498).
-    """
-    if not isinstance(name, str):
-        name = str(name)
-    stripped = name.strip()
-    if not stripped:
-        raise ValueError("profile name cannot be empty")
-    if stripped.casefold() == "default":
-        return "default"
-    return stripped.lower()
-
-
 def validate_profile_name(name: str) -> None:
-    """Raise ``ValueError`` if *name* is not a valid profile identifier.
-
-    Validates the input as-given — strict lowercase match. Callers that accept
-    mixed-case or title-cased input from users (dashboard UI, CLI args) should
-    call :func:`normalize_profile_name` first. This separation keeps validate
-    honest about what the on-disk directory name must look like, while
-    ingress-point normalization handles UX flexibility (see #18498).
-    """
+    """Raise ``ValueError`` if *name* is not a valid profile identifier."""
     if name == "default":
         return  # special alias for ~/.hermes
     if not _PROFILE_ID_RE.match(name):
@@ -217,18 +169,16 @@ def validate_profile_name(name: str) -> None:
 
 def get_profile_dir(name: str) -> Path:
     """Resolve a profile name to its HERMES_HOME directory."""
-    canon = normalize_profile_name(name)
-    if canon == "default":
+    if name == "default":
         return _get_default_hermes_home()
-    return _get_profiles_root() / canon
+    return _get_profiles_root() / name
 
 
 def profile_exists(name: str) -> bool:
     """Check whether a profile directory exists."""
-    canon = normalize_profile_name(name)
-    if canon == "default":
+    if name == "default":
         return True
-    return get_profile_dir(canon).is_dir()
+    return get_profile_dir(name).is_dir()
 
 
 # ---------------------------------------------------------------------------
@@ -240,29 +190,28 @@ def check_alias_collision(name: str) -> Optional[str]:
 
     Checks: reserved names, hermes subcommands, existing binaries in PATH.
     """
-    canon = normalize_profile_name(name)
-    if canon in _RESERVED_NAMES:
-        return f"'{canon}' is a reserved name"
-    if canon in _HERMES_SUBCOMMANDS:
-        return f"'{canon}' conflicts with a hermes subcommand"
+    if name in _RESERVED_NAMES:
+        return f"'{name}' is a reserved name"
+    if name in _HERMES_SUBCOMMANDS:
+        return f"'{name}' conflicts with a hermes subcommand"
 
     # Check existing commands in PATH
     wrapper_dir = _get_wrapper_dir()
     try:
         result = subprocess.run(
-            ["which", canon], capture_output=True, text=True, timeout=5,
+            ["which", name], capture_output=True, text=True, timeout=5,
         )
         if result.returncode == 0:
             existing_path = result.stdout.strip()
             # Allow overwriting our own wrappers
-            if existing_path == str(wrapper_dir / canon):
+            if existing_path == str(wrapper_dir / name):
                 try:
-                    content = (wrapper_dir / canon).read_text()
+                    content = (wrapper_dir / name).read_text()
                     if "hermes -p" in content:
                         return None  # it's our wrapper, safe to overwrite
                 except Exception:
                     pass
-            return f"'{canon}' conflicts with an existing command ({existing_path})"
+            return f"'{name}' conflicts with an existing command ({existing_path})"
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
 
@@ -280,7 +229,6 @@ def create_wrapper_script(name: str) -> Optional[Path]:
 
     Returns the path to the created wrapper, or None if creation failed.
     """
-    canon = normalize_profile_name(name)
     wrapper_dir = _get_wrapper_dir()
     try:
         wrapper_dir.mkdir(parents=True, exist_ok=True)
@@ -288,9 +236,9 @@ def create_wrapper_script(name: str) -> Optional[Path]:
         print(f"⚠ Could not create {wrapper_dir}: {e}")
         return None
 
-    wrapper_path = wrapper_dir / canon
+    wrapper_path = wrapper_dir / name
     try:
-        wrapper_path.write_text(f'#!/bin/sh\nexec hermes -p {canon} "$@"\n')
+        wrapper_path.write_text(f'#!/bin/sh\nexec hermes -p {name} "$@"\n')
         wrapper_path.chmod(wrapper_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
         return wrapper_path
     except OSError as e:
@@ -300,7 +248,7 @@ def create_wrapper_script(name: str) -> Optional[Path]:
 
 def remove_wrapper_script(name: str) -> bool:
     """Remove the wrapper script for a profile. Returns True if removed."""
-    wrapper_path = _get_wrapper_dir() / normalize_profile_name(name)
+    wrapper_path = _get_wrapper_dir() / name
     if wrapper_path.exists():
         try:
             # Verify it's our wrapper before removing
@@ -440,8 +388,7 @@ def create_profile(
     clone_all:
         If True, do a full copytree of the source (all state).
     clone_config:
-        If True, copy config files (config.yaml, .env, SOUL.md), installed
-        skills, and selected profile identity files from the source profile.
+        If True, copy only config files (config.yaml, .env, SOUL.md).
     no_alias:
         If True, skip wrapper script creation.
 
@@ -450,17 +397,16 @@ def create_profile(
     Path
         The newly created profile directory.
     """
-    canon = normalize_profile_name(name)
-    validate_profile_name(canon)
+    validate_profile_name(name)
 
-    if canon == "default":
+    if name == "default":
         raise ValueError(
             "Cannot create a profile named 'default' — it is the built-in profile (~/.hermes)."
         )
 
-    profile_dir = get_profile_dir(canon)
+    profile_dir = get_profile_dir(name)
     if profile_dir.exists():
-        raise FileExistsError(f"Profile '{canon}' already exists at {profile_dir}")
+        raise FileExistsError(f"Profile '{name}' already exists at {profile_dir}")
 
     # Resolve clone source
     source_dir = None
@@ -470,7 +416,6 @@ def create_profile(
             from hermes_constants import get_hermes_home
             source_dir = get_hermes_home()
         else:
-            clone_from = normalize_profile_name(clone_from)
             validate_profile_name(clone_from)
             source_dir = get_profile_dir(clone_from)
         if not source_dir.is_dir():
@@ -479,12 +424,8 @@ def create_profile(
             )
 
     if clone_all and source_dir:
-        # Full copy of source profile (exclude sibling ~/.hermes/profiles/)
-        shutil.copytree(
-            source_dir,
-            profile_dir,
-            ignore=_clone_all_copytree_ignore(source_dir),
-        )
+        # Full copy of source profile
+        shutil.copytree(source_dir, profile_dir)
         # Strip runtime files
         for stale in _CLONE_ALL_STRIP:
             (profile_dir / stale).unlink(missing_ok=True)
@@ -500,14 +441,6 @@ def create_profile(
                 src = source_dir / filename
                 if src.exists():
                     shutil.copy2(src, profile_dir / filename)
-
-            # Clone installed skills from the source profile. The dashboard's
-            # "clone from default" flow is expected to preserve both bundled
-            # and user-installed skills so the new profile immediately has the
-            # same agent capabilities as the source profile.
-            source_skills = source_dir / "skills"
-            if source_skills.is_dir():
-                shutil.copytree(source_skills, profile_dir / "skills", dirs_exist_ok=True)
 
             # Clone memory and other subdirectory files
             for relpath in _CLONE_SUBDIR_FILES:
@@ -571,25 +504,24 @@ def delete_profile(name: str, yes: bool = False) -> Path:
 
     Returns the path that was removed.
     """
-    canon = normalize_profile_name(name)
-    validate_profile_name(canon)
+    validate_profile_name(name)
 
-    if canon == "default":
+    if name == "default":
         raise ValueError(
             "Cannot delete the default profile (~/.hermes).\n"
             "To remove everything, use: hermes uninstall"
         )
 
-    profile_dir = get_profile_dir(canon)
+    profile_dir = get_profile_dir(name)
     if not profile_dir.is_dir():
-        raise FileNotFoundError(f"Profile '{canon}' does not exist.")
+        raise FileNotFoundError(f"Profile '{name}' does not exist.")
 
     # Show what will be deleted
     model, provider = _read_config_model(profile_dir)
     gw_running = _check_gateway_running(profile_dir)
     skill_count = _count_skills(profile_dir)
 
-    print(f"\nProfile: {canon}")
+    print(f"\nProfile: {name}")
     print(f"Path:    {profile_dir}")
     if model:
         print(f"Model:   {model}" + (f" ({provider})" if provider else ""))
@@ -601,7 +533,7 @@ def delete_profile(name: str, yes: bool = False) -> Path:
     ]
 
     # Check for service
-    wrapper_path = _get_wrapper_dir() / canon
+    wrapper_path = _get_wrapper_dir() / name
     has_wrapper = wrapper_path.exists()
     if has_wrapper:
         items.append(f"Command alias ({wrapper_path})")
@@ -616,16 +548,16 @@ def delete_profile(name: str, yes: bool = False) -> Path:
     if not yes:
         print()
         try:
-            confirm = input(f"Type '{canon}' to confirm: ").strip()
+            confirm = input(f"Type '{name}' to confirm: ").strip()
         except (KeyboardInterrupt, EOFError):
             print("\nCancelled.")
             return profile_dir
-        if confirm != canon:
+        if confirm != name:
             print("Cancelled.")
             return profile_dir
 
     # 1. Disable service (prevents auto-restart)
-    _cleanup_gateway_service(canon, profile_dir)
+    _cleanup_gateway_service(name, profile_dir)
 
     # 2. Stop running gateway
     if gw_running:
@@ -633,7 +565,7 @@ def delete_profile(name: str, yes: bool = False) -> Path:
 
     # 3. Remove wrapper script
     if has_wrapper:
-        if remove_wrapper_script(canon):
+        if remove_wrapper_script(name):
             print(f"✓ Removed {wrapper_path}")
 
     # 4. Remove profile directory
@@ -646,13 +578,13 @@ def delete_profile(name: str, yes: bool = False) -> Path:
     # 5. Clear active_profile if it pointed to this profile
     try:
         active = get_active_profile()
-        if active == canon:
+        if active == name:
             set_active_profile("default")
             print("✓ Active profile reset to default")
     except Exception:
         pass
 
-    print(f"\nProfile '{canon}' deleted.")
+    print(f"\nProfile '{name}' deleted.")
     return profile_dir
 
 
@@ -762,23 +694,22 @@ def set_active_profile(name: str) -> None:
 
     Writes to ``~/.hermes/active_profile``. Use ``"default"`` to clear.
     """
-    canon = normalize_profile_name(name)
-    validate_profile_name(canon)
-    if canon != "default" and not profile_exists(canon):
+    validate_profile_name(name)
+    if name != "default" and not profile_exists(name):
         raise FileNotFoundError(
-            f"Profile '{canon}' does not exist. "
-            f"Create it with: hermes profile create {canon}"
+            f"Profile '{name}' does not exist. "
+            f"Create it with: hermes profile create {name}"
         )
 
     path = _get_active_profile_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    if canon == "default":
+    if name == "default":
         # Remove the file to indicate default
         path.unlink(missing_ok=True)
     else:
         # Atomic write
         tmp = path.with_suffix(".tmp")
-        tmp.write_text(canon + "\n")
+        tmp.write_text(name + "\n")
         tmp.replace(path)
 
 
@@ -844,17 +775,16 @@ def export_profile(name: str, output_path: str) -> Path:
     """
     import tempfile
 
-    canon = normalize_profile_name(name)
-    validate_profile_name(canon)
-    profile_dir = get_profile_dir(canon)
+    validate_profile_name(name)
+    profile_dir = get_profile_dir(name)
     if not profile_dir.is_dir():
-        raise FileNotFoundError(f"Profile '{canon}' does not exist.")
+        raise FileNotFoundError(f"Profile '{name}' does not exist.")
 
     output = Path(output_path)
     # shutil.make_archive wants the base name without extension
     base = str(output).removesuffix(".tar.gz").removesuffix(".tgz")
 
-    if canon == "default":
+    if name == "default":
         # The default profile IS ~/.hermes itself — its parent is ~/ and its
         # directory name is ".hermes", not "default".  We stage a clean copy
         # under a temp dir so the archive contains ``default/...``.
@@ -870,14 +800,14 @@ def export_profile(name: str, output_path: str) -> Path:
 
     # Named profiles — stage a filtered copy to exclude credentials
     with tempfile.TemporaryDirectory() as tmpdir:
-        staged = Path(tmpdir) / canon
+        staged = Path(tmpdir) / name
         _CREDENTIAL_FILES = {"auth.json", ".env"}
         shutil.copytree(
             profile_dir,
             staged,
             ignore=lambda d, contents: _CREDENTIAL_FILES & set(contents),
         )
-        result = shutil.make_archive(base, "gztar", tmpdir, canon)
+        result = shutil.make_archive(base, "gztar", tmpdir, name)
         return Path(result)
 
 
@@ -986,17 +916,16 @@ def import_profile(archive_path: str, name: Optional[str] = None) -> Path:
     # Archives exported from the default profile have "default/" as top-level
     # dir.  Importing as "default" would target ~/.hermes itself — disallow
     # that and guide the user toward a named profile.
-    canon = normalize_profile_name(inferred_name)
-    validate_profile_name(canon)
-    if canon == "default":
+    if inferred_name == "default":
         raise ValueError(
             "Cannot import as 'default' — that is the built-in root profile (~/.hermes). "
             "Specify a different name: hermes profile import <archive> --name <name>"
         )
 
-    profile_dir = get_profile_dir(canon)
+    validate_profile_name(inferred_name)
+    profile_dir = get_profile_dir(inferred_name)
     if profile_dir.exists():
-        raise FileExistsError(f"Profile '{canon}' already exists at {profile_dir}")
+        raise FileExistsError(f"Profile '{inferred_name}' already exists at {profile_dir}")
 
     profiles_root = _get_profiles_root()
     profiles_root.mkdir(parents=True, exist_ok=True)
@@ -1012,8 +941,8 @@ def import_profile(archive_path: str, name: Optional[str] = None) -> Path:
             )
 
         final_source = extracted
-        if archive_root != canon:
-            final_source = staging_root / canon
+        if archive_root != inferred_name:
+            final_source = staging_root / inferred_name
             extracted.rename(final_source)
 
         shutil.move(str(final_source), str(profile_dir))
@@ -1083,27 +1012,25 @@ def rename_profile(old_name: str, new_name: str) -> Path:
 
     Returns the new profile directory.
     """
-    old_canon = normalize_profile_name(old_name)
-    new_canon = normalize_profile_name(new_name)
-    validate_profile_name(old_canon)
-    validate_profile_name(new_canon)
+    validate_profile_name(old_name)
+    validate_profile_name(new_name)
 
-    if old_canon == "default":
+    if old_name == "default":
         raise ValueError("Cannot rename the default profile.")
-    if new_canon == "default":
+    if new_name == "default":
         raise ValueError("Cannot rename to 'default' — it is reserved.")
 
-    old_dir = get_profile_dir(old_canon)
-    new_dir = get_profile_dir(new_canon)
+    old_dir = get_profile_dir(old_name)
+    new_dir = get_profile_dir(new_name)
 
     if not old_dir.is_dir():
-        raise FileNotFoundError(f"Profile '{old_canon}' does not exist.")
+        raise FileNotFoundError(f"Profile '{old_name}' does not exist.")
     if new_dir.exists():
-        raise FileExistsError(f"Profile '{new_canon}' already exists.")
+        raise FileExistsError(f"Profile '{new_name}' already exists.")
 
     # 1. Stop gateway if running
     if _check_gateway_running(old_dir):
-        _cleanup_gateway_service(old_canon, old_dir)
+        _cleanup_gateway_service(old_name, old_dir)
         _stop_gateway_process(old_dir)
 
     # 2. Rename directory
@@ -1111,22 +1038,22 @@ def rename_profile(old_name: str, new_name: str) -> Path:
     print(f"✓ Renamed {old_dir.name} → {new_dir.name}")
 
     # 3. Update profile-scoped Honcho host blocks, preserving aiPeer identity
-    _migrate_honcho_profile_host(old_canon, new_canon, new_dir)
+    _migrate_honcho_profile_host(old_name, new_name, new_dir)
 
     # 4. Update wrapper script
-    remove_wrapper_script(old_canon)
-    collision = check_alias_collision(new_canon)
+    remove_wrapper_script(old_name)
+    collision = check_alias_collision(new_name)
     if not collision:
-        create_wrapper_script(new_canon)
-        print(f"✓ Alias updated: {new_canon}")
+        create_wrapper_script(new_name)
+        print(f"✓ Alias updated: {new_name}")
     else:
-        print(f"⚠ Cannot create alias '{new_canon}' — {collision}")
+        print(f"⚠ Cannot create alias '{new_name}' — {collision}")
 
     # 5. Update active_profile if it pointed to old name
     try:
-        if get_active_profile() == old_canon:
-            set_active_profile(new_canon)
-            print(f"✓ Active profile updated: {new_canon}")
+        if get_active_profile() == old_name:
+            set_active_profile(new_name)
+            print(f"✓ Active profile updated: {new_name}")
     except Exception:
         pass
 
@@ -1228,14 +1155,13 @@ def resolve_profile_env(profile_name: str) -> str:
     Called early in the CLI entry point, before any hermes modules
     are imported, to set the HERMES_HOME environment variable.
     """
-    canon = normalize_profile_name(profile_name)
-    validate_profile_name(canon)
-    profile_dir = get_profile_dir(canon)
+    validate_profile_name(profile_name)
+    profile_dir = get_profile_dir(profile_name)
 
-    if canon != "default" and not profile_dir.is_dir():
+    if profile_name != "default" and not profile_dir.is_dir():
         raise FileNotFoundError(
-            f"Profile '{canon}' does not exist. "
-            f"Create it with: hermes profile create {canon}"
+            f"Profile '{profile_name}' does not exist. "
+            f"Create it with: hermes profile create {profile_name}"
         )
 
     return str(profile_dir)

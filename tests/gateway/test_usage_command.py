@@ -176,6 +176,100 @@ class TestUsageCachedAgent:
 
         assert "Cost: included" in result
 
+    @pytest.mark.asyncio
+    async def test_usage_shows_compaction_counters(self):
+        agent = _make_mock_agent()
+        agent._build_compaction_metrics.return_value = {
+            "event_count": 2,
+            "proxy_overflow_compactions": 1,
+            "by_source": {"local_policy": 1, "admission_proxy": 1},
+            "by_trigger": {"threshold": 1, "proxy_context_overflow_retry": 1},
+        }
+        runner = _make_runner(SK, cached_agent=agent)
+        event = MagicMock()
+
+        with patch("agent.rate_limit_tracker.format_rate_limit_compact", return_value="RPM: 50/60"), \
+             patch("agent.usage_pricing.estimate_usage_cost") as mock_cost:
+            mock_cost.return_value = MagicMock(amount_usd=None, status="unknown")
+            result = await runner._handle_usage_command(event)
+
+        assert "Compaction events: 2" in result
+        assert "Proxy retry compactions: 1" in result
+
+
+class TestCompactionCommand:
+    @pytest.mark.asyncio
+    async def test_cached_agent_shows_compaction_report(self):
+        agent = _make_mock_agent()
+        agent.session_id = "sess123"
+        agent._compaction_events = [
+            {
+                "source": "admission_proxy",
+                "trigger": "proxy_context_overflow_retry",
+                "estimated_input_tokens": 91000,
+                "max_input_tokens": 64000,
+                "timestamp": "2026-04-20T12:00:00",
+            }
+        ]
+        agent._build_compaction_metrics.return_value = {
+            "event_count": 1,
+            "by_source": {"admission_proxy": 1},
+            "by_trigger": {"proxy_context_overflow_retry": 1},
+            "proxy_overflow_compactions": 1,
+        }
+
+        runner = _make_runner(SK, cached_agent=agent)
+        event = MagicMock()
+        event.source = MagicMock()
+        event.get_command_args.return_value = ""
+        session_entry = MagicMock()
+        session_entry.session_id = "sess123"
+        runner.session_store.get_or_create_session.return_value = session_entry
+
+        result = await runner._handle_compaction_command(event)
+
+        assert "Compaction Report" in result
+        assert "proxy_context_overflow_retry" in result
+        assert "Admission-proxy retries: 1" in result
+
+    @pytest.mark.asyncio
+    async def test_invalid_count_returns_error(self):
+        runner = _make_runner(SK)
+        event = MagicMock()
+        event.source = MagicMock()
+        event.get_command_args.return_value = "abc"
+        runner.session_store.get_or_create_session.return_value = MagicMock(session_id="sess123")
+
+        result = await runner._handle_compaction_command(event)
+
+        assert "Unrecognized argument: abc" == result
+
+    @pytest.mark.asyncio
+    async def test_session_selector_uses_title_lookup(self):
+        agent = _make_mock_agent()
+        agent.session_id = "other-session"
+        agent._compaction_events = [{"source": "local_policy", "trigger": "threshold"}]
+        agent._build_compaction_metrics.return_value = {
+            "event_count": 1,
+            "by_source": {"local_policy": 1},
+            "by_trigger": {"threshold": 1},
+        }
+        runner = _make_runner(SK, cached_agent=agent)
+        runner._session_db = MagicMock()
+        runner._session_db.get_session.return_value = None
+        runner._session_db.get_session_by_title.return_value = {"id": "other-session"}
+        event = MagicMock()
+        event.source = MagicMock()
+        event.get_command_args.return_value = "--session deploy-debug"
+        session_entry = MagicMock()
+        session_entry.session_id = "sess123"
+        runner.session_store.get_or_create_session.return_value = session_entry
+
+        result = await runner._handle_compaction_command(event)
+
+        assert "Compaction Report" in result
+        assert "other-session" in result
+
 
 class TestUsageAccountSection:
     """Account-limits section appended to /usage output (PR #2486)."""

@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "description": "Public-safe Hermes cron seed templates. No live outputs, origins, channel IDs, or credentials.",
+  "jobs": [
+    {
+      "name": "Hermes stack CVE checkup",
+      "schedule": "0 9 * * 1",
+      "deliver": "local",
+      "skills": ["stack-cve-checkup"],
+      "prompt": "Run the stack-cve-checkup skill against the checked-out Hermes repo, not only internal HERMES_HOME state. Prefer HERMES_STACK_REPO when set. Update docs/stack-inventory.json, docs/stack-cve-report.md, and docs/stack-cve-report.json in that repo. For code or lockfile remediations, create/update a branch and PR; do not push main, merge, deploy, or apply dependency updates unless the operator explicitly approves them."
+    },
+    {
+      "name": "Hermes reproducibility drift audit",
+      "schedule": "0 10 * * 1",
+      "deliver": "local",
+      "skills": [],
+      "prompt": "Run scripts/audit_live_reproducibility.py from the checked-out repo. Summarize any drift between the repo, live pod image, persistent repo checkout, ConfigMap, seeded cron jobs, and seeded skills. Do not export secrets, sessions, logs, or private workspace contents."
+    },
+    {
+      "name": "Cluster SIEM review",
+      "schedule": "30 9 * * *",
+      "deliver": "local",
+      "skills": ["siem-review"],
+      "prompt": "Run the siem-review skill against the live cluster SIEM. Check Elasticsearch/Kibana health, recent alert-like events, noisy sources, disabled/partial-failure detection rules, and telemetry gaps. Classify findings as incident, misconfiguration, operational, benign/noise, or gap. Suggest conservative fixes or detection improvements only; do not delete indices, teardown namespaces, disable alerting, rotate secrets, or apply live cluster changes without explicit operator approval."
+    },
+    {
+      "name": "Hermes nightly local LLM review",
+      "schedule": "15 3 * * *",
+      "deliver": "local",
+      "skills": ["hermes-local-llm-nightly"],
+      "prompt": "Run the hermes-local-llm-nightly skill against the checked-out Hermes repo and local model store. Start by reconciling and resuming the durable nightly state with `python scripts/local_llm_nightly_state.py reconcile` and `python scripts/local_llm_nightly_state.py begin --phase startup`. Use `$HERMES_HOME/self-improvement/local-llm-nightly/state.json` as the in-progress ledger for phase, current candidate, candidate statuses, interrupted-run recovery, and cleanup debt. Cover all three lanes in one bounded pass: (1) check whether already-retained local model families have better new versions, quants, variants, runtime fixes, or stronger upstream guidance; (2) check whether genuinely new replacement candidates, model families, or runtime technologies now exist that were not in the prior pass and are worth evaluation; (3) for candidates worth real testing, download bounded first-pass quants, benchmark them with the existing local scripts, update the matrix/results docs for any viable retained candidate, and for rejected candidates write down exactly what was tested and why they were not viable before deleting the downloaded weights. Checkpoint state after research triage, each download, each benchmark stage, each retain/reject decision, and cleanup. If the previous pass was interrupted, finish or document partial work before starting fresh downloads. If a rejected model file is still on disk, delete it after confirming the rejection note. Write the nightly decision artifact to `$HERMES_HOME/self-improvement/local-llm-nightly/reports/YYYY-MM-DD.md`, refresh `$HERMES_HOME/self-improvement/local-llm-nightly/reports/latest.md`, and finalize with `python scripts/local_llm_nightly_state.py finalize --status completed --report-path \"$HERMES_HOME/self-improvement/local-llm-nightly/reports/YYYY-MM-DD.md\"`. Use flat sections for `Retained`, `Rejected`, `Deleted downloads`, `Needs follow-up`, and `Next-best downloads`. Do not switch the live primary model, restart the live primary service, deploy, merge PRs, or keep dead-end downloads without a written reason. End with either [SILENT] if nothing actionable changed or a terse structured summary naming retained, rejected, and follow-up candidates."
+    },
+    {
+      "name": "Hermes local LLM approval handoff",
+      "schedule": "45 3 * * *",
+      "deliver": "local,email:keith@snape.tech",
+      "skills": ["hermes-local-llm-promotion-handoff"],
+      "prompt": "Run the hermes-local-llm-promotion-handoff skill against the checked-out Hermes repo. Start from `$HERMES_HOME/self-improvement/local-llm-nightly/reports/latest.md`, `$HERMES_HOME/self-improvement/local-llm-nightly/state.json`, and the current benchmark docs. If there is no evidence-backed promotion or remediation that genuinely needs human approval, return exactly `[SILENT]`. If there is an approval-worthy proposal, create a deterministic handoff packet with `python scripts/local_llm_handoff_packet.py ...` under `$HERMES_HOME/self-improvement/local-llm-nightly/handoffs/`, create or update a dedicated `llm-handoff/YYYY-MM-DD-<slug>` branch, commit the relevant docs/config packet changes, push the branch, and open or update a draft PR against `main`. The PR and email must explain the reasoning, evidence, operational risks, and why human approval is required. Do not merge, do not restart the live primary service, and do not switch production routing. The final response will be auto-delivered to `keith@snape.tech`; make it a concise approval email that includes the proposal kind, branch, PR URL if available, and the core reasoning."
+    }
+  ]
+}

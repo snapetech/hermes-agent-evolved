@@ -78,6 +78,13 @@ export LANG=C.UTF-8
 export LC_ALL=C.UTF-8
 export PYTHONHASHSEED=0
 
+# Keep module-import-time config reads from touching the developer's real
+# profile. tests/conftest.py also isolates HERMES_HOME during tests, but some
+# modules read config while test files are imported, before fixtures run.
+_HERMES_TEST_HOME="$(mktemp -d)"
+export HERMES_HOME="$_HERMES_TEST_HOME"
+trap 'rm -rf "$_HERMES_TEST_HOME"' EXIT
+
 # ── Worker count ────────────────────────────────────────────────────────────
 # CI uses `-n auto` on ubuntu-latest which gives 4 workers. A 20-core
 # workstation with `-n auto` gets 20 workers and exposes test-ordering

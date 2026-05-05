@@ -21,7 +21,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from hermes_constants import get_hermes_home
 from typing import Any, Optional
-from utils import atomic_json_write
 
 if sys.platform == "win32":
     import msvcrt
@@ -35,10 +34,6 @@ _IS_WINDOWS = sys.platform == "win32"
 _UNSET = object()
 _GATEWAY_LOCK_FILENAME = "gateway.lock"
 _gateway_lock_handle = None
-# Windows byte-range locks are mandatory for other readers. Lock a byte well
-# past the JSON payload so runtime status / PID readers can still read the file
-# while another process holds the mutual-exclusion lock.
-_WINDOWS_LOCK_OFFSET = 1024 * 1024
 
 
 def _get_pid_path() -> Path:
@@ -186,8 +181,12 @@ def _build_runtime_status_record() -> dict[str, Any]:
         "gateway_state": "starting",
         "exit_reason": None,
         "restart_requested": False,
+        "auto_restart_pending": False,
+        "auto_restart_reason": None,
+        "last_runtime_reload_at": None,
         "active_agents": 0,
         "platforms": {},
+        "routing": {"routes": {}, "recent_events": []},
         "updated_at": _utc_now_iso(),
     })
     return payload
@@ -210,7 +209,8 @@ def _read_json_file(path: Path) -> Optional[dict[str, Any]]:
 
 
 def _write_json_file(path: Path, payload: dict[str, Any]) -> None:
-    atomic_json_write(path, payload, indent=None, separators=(",", ":"))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload))
 
 
 def _read_pid_record(pid_path: Optional[Path] = None) -> Optional[dict]:
@@ -290,7 +290,7 @@ def _try_acquire_file_lock(handle) -> bool:
             if handle.tell() == 0:
                 handle.write("\n")
                 handle.flush()
-            handle.seek(_WINDOWS_LOCK_OFFSET)
+            handle.seek(0)
             msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
         else:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -302,7 +302,7 @@ def _try_acquire_file_lock(handle) -> bool:
 def _release_file_lock(handle) -> None:
     try:
         if _IS_WINDOWS:
-            handle.seek(_WINDOWS_LOCK_OFFSET)
+            handle.seek(0)
             msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
         else:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
@@ -398,11 +398,15 @@ def write_runtime_status(
     gateway_state: Any = _UNSET,
     exit_reason: Any = _UNSET,
     restart_requested: Any = _UNSET,
+    auto_restart_pending: Any = _UNSET,
+    auto_restart_reason: Any = _UNSET,
+    last_runtime_reload_at: Any = _UNSET,
     active_agents: Any = _UNSET,
     platform: Any = _UNSET,
     platform_state: Any = _UNSET,
     error_code: Any = _UNSET,
     error_message: Any = _UNSET,
+    routing_snapshot: Any = _UNSET,
 ) -> None:
     """Persist gateway runtime health information for diagnostics/status."""
     path = _get_runtime_status_path()
@@ -419,8 +423,16 @@ def write_runtime_status(
         payload["exit_reason"] = exit_reason
     if restart_requested is not _UNSET:
         payload["restart_requested"] = bool(restart_requested)
+    if auto_restart_pending is not _UNSET:
+        payload["auto_restart_pending"] = bool(auto_restart_pending)
+    if auto_restart_reason is not _UNSET:
+        payload["auto_restart_reason"] = auto_restart_reason
+    if last_runtime_reload_at is not _UNSET:
+        payload["last_runtime_reload_at"] = last_runtime_reload_at
     if active_agents is not _UNSET:
         payload["active_agents"] = max(0, int(active_agents))
+    if routing_snapshot is not _UNSET:
+        payload["routing"] = routing_snapshot or {"routes": {}, "recent_events": []}
 
     if platform is not _UNSET:
         platform_payload = payload["platforms"].get(platform, {})
@@ -439,6 +451,32 @@ def write_runtime_status(
 def read_runtime_status() -> Optional[dict[str, Any]]:
     """Read the persisted gateway runtime health/status information."""
     return _read_json_file(_get_runtime_status_path())
+
+
+def prune_stale_platforms(active_platform_names: Any) -> None:
+    """Drop persisted platform entries that are not active on this run.
+
+    When a platform's creds are removed from the environment (or a new binary
+    drops a platform), its last-known `state: retrying` entry otherwise
+    lingers in `gateway_state.json` forever, making `/health/detailed` look
+    broken after a clean restart.
+    """
+    active = {str(name) for name in (active_platform_names or [])}
+    path = _get_runtime_status_path()
+    payload = _read_json_file(path)
+    if not payload:
+        return
+    platforms = payload.get("platforms") or {}
+    if not isinstance(platforms, dict):
+        return
+    stale = [name for name in platforms if name not in active]
+    if not stale:
+        return
+    for name in stale:
+        platforms.pop(name, None)
+    payload["platforms"] = platforms
+    payload["updated_at"] = _utc_now_iso()
+    _write_json_file(path, payload)
 
 
 def remove_pid_file() -> None:
@@ -637,75 +675,12 @@ def release_all_scoped_locks(
 
 _TAKEOVER_MARKER_FILENAME = ".gateway-takeover.json"
 _TAKEOVER_MARKER_TTL_S = 60  # Marker older than this is treated as stale
-_PLANNED_STOP_MARKER_FILENAME = ".gateway-planned-stop.json"
-_PLANNED_STOP_MARKER_TTL_S = 60
 
 
 def _get_takeover_marker_path() -> Path:
     """Return the path to the --replace takeover marker file."""
     home = get_hermes_home()
     return home / _TAKEOVER_MARKER_FILENAME
-
-
-def _get_planned_stop_marker_path() -> Path:
-    """Return the path to the intentional gateway stop marker file."""
-    home = get_hermes_home()
-    return home / _PLANNED_STOP_MARKER_FILENAME
-
-
-def _marker_is_stale(written_at: str, ttl_s: int) -> bool:
-    try:
-        written_dt = datetime.fromisoformat(written_at)
-        age = (datetime.now(timezone.utc) - written_dt).total_seconds()
-        return age > ttl_s
-    except (TypeError, ValueError):
-        return True
-
-
-def _consume_pid_marker_for_self(
-    path: Path,
-    *,
-    pid_field: str,
-    start_time_field: str,
-    ttl_s: int,
-) -> bool:
-    record = _read_json_file(path)
-    if not record:
-        return False
-
-    try:
-        target_pid = int(record[pid_field])
-        target_start_time = record.get(start_time_field)
-        written_at = record.get("written_at") or ""
-    except (KeyError, TypeError, ValueError):
-        try:
-            path.unlink(missing_ok=True)
-        except OSError:
-            pass
-        return False
-
-    if _marker_is_stale(written_at, ttl_s):
-        try:
-            path.unlink(missing_ok=True)
-        except OSError:
-            pass
-        return False
-
-    our_pid = os.getpid()
-    our_start_time = _get_process_start_time(our_pid)
-    matches = (
-        target_pid == our_pid
-        and target_start_time is not None
-        and our_start_time is not None
-        and target_start_time == our_start_time
-    )
-
-    try:
-        path.unlink(missing_ok=True)
-    except OSError:
-        pass
-
-    return matches
 
 
 def write_takeover_marker(target_pid: int) -> bool:
@@ -744,57 +719,64 @@ def consume_takeover_marker_for_self() -> bool:
     Always unlinks the marker on match (and on detected staleness) so
     subsequent unrelated signals don't re-trigger.
     """
-    return _consume_pid_marker_for_self(
-        _get_takeover_marker_path(),
-        pid_field="target_pid",
-        start_time_field="target_start_time",
-        ttl_s=_TAKEOVER_MARKER_TTL_S,
+    path = _get_takeover_marker_path()
+    record = _read_json_file(path)
+    if not record:
+        return False
+
+    # Any malformed or stale marker → drop it and return False
+    try:
+        target_pid = int(record["target_pid"])
+        target_start_time = record.get("target_start_time")
+        written_at = record.get("written_at") or ""
+    except (KeyError, TypeError, ValueError):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return False
+
+    # TTL guard: a stale marker older than _TAKEOVER_MARKER_TTL_S is ignored.
+    stale = False
+    try:
+        written_dt = datetime.fromisoformat(written_at)
+        age = (datetime.now(timezone.utc) - written_dt).total_seconds()
+        if age > _TAKEOVER_MARKER_TTL_S:
+            stale = True
+    except (TypeError, ValueError):
+        stale = True  # Unparseable timestamp — treat as stale
+
+    if stale:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return False
+
+    # Does the marker name THIS process?
+    our_pid = os.getpid()
+    our_start_time = _get_process_start_time(our_pid)
+    matches = (
+        target_pid == our_pid
+        and target_start_time is not None
+        and our_start_time is not None
+        and target_start_time == our_start_time
     )
+
+    # Consume the marker whether it matched or not — a marker that doesn't
+    # match our identity is stale-for-us anyway.
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+    return matches
 
 
 def clear_takeover_marker() -> None:
     """Remove the takeover marker unconditionally. Safe to call repeatedly."""
     try:
         _get_takeover_marker_path().unlink(missing_ok=True)
-    except OSError:
-        pass
-
-
-def write_planned_stop_marker(target_pid: int) -> bool:
-    """Record that ``target_pid`` is being stopped intentionally.
-
-    The gateway exits non-zero for unexpected SIGTERM so service managers can
-    revive it. Service stop commands send the same SIGTERM, so the CLI writes
-    this short-lived marker first to let the target process exit cleanly.
-    """
-    try:
-        target_start_time = _get_process_start_time(target_pid)
-        record = {
-            "target_pid": target_pid,
-            "target_start_time": target_start_time,
-            "stopper_pid": os.getpid(),
-            "written_at": _utc_now_iso(),
-        }
-        _write_json_file(_get_planned_stop_marker_path(), record)
-        return True
-    except (OSError, PermissionError):
-        return False
-
-
-def consume_planned_stop_marker_for_self() -> bool:
-    """Return True when the current process is being intentionally stopped."""
-    return _consume_pid_marker_for_self(
-        _get_planned_stop_marker_path(),
-        pid_field="target_pid",
-        start_time_field="target_start_time",
-        ttl_s=_PLANNED_STOP_MARKER_TTL_S,
-    )
-
-
-def clear_planned_stop_marker() -> None:
-    """Remove the planned-stop marker unconditionally."""
-    try:
-        _get_planned_stop_marker_path().unlink(missing_ok=True)
     except OSError:
         pass
 

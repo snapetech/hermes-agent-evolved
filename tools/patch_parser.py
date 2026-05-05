@@ -402,10 +402,15 @@ def apply_v4a_operations(operations: List[PatchOperation],
         except Exception as e:
             errors.append(f"Error processing {op.file_path}: {str(e)}")
 
-    # Run lint on all modified/created files
+    # Run validation on all modified/created files
     lint_results = {}
+    validation_results = {}
     for f in files_modified + files_created:
-        if hasattr(file_ops, '_check_lint'):
+        if hasattr(file_ops, '_validate_file'):
+            validation_result = file_ops._validate_file(f)
+            validation_results[f] = validation_result
+            lint_results[f] = validation_result.get("lint", {})
+        elif hasattr(file_ops, '_check_lint'):
             lint_result = file_ops._check_lint(f)
             lint_results[f] = lint_result.to_dict()
 
@@ -419,6 +424,7 @@ def apply_v4a_operations(operations: List[PatchOperation],
             files_created=files_created,
             files_deleted=files_deleted,
             lint=lint_results if lint_results else None,
+            validation=validation_results if validation_results else None,
             error="Apply phase failed (state may be inconsistent — run `git diff` to assess):\n"
                   + "\n".join(f"  • {e}" for e in errors),
         )
@@ -430,6 +436,7 @@ def apply_v4a_operations(operations: List[PatchOperation],
         files_created=files_created,
         files_deleted=files_deleted,
         lint=lint_results if lint_results else None,
+        validation=validation_results if validation_results else None,
     )
 
 

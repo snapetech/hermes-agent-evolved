@@ -1,4 +1,6 @@
 import asyncio
+import threading
+from collections import OrderedDict
 from unittest.mock import AsyncMock, MagicMock
 
 from gateway.config import GatewayConfig, Platform, PlatformConfig
@@ -12,7 +14,6 @@ class RestartTestAdapter(BasePlatformAdapter):
     def __init__(self):
         super().__init__(PlatformConfig(enabled=True, token="***"), Platform.TELEGRAM)
         self.sent: list[str] = []
-        self.sent_calls: list[tuple[str, str, object]] = []
 
     async def connect(self):
         return True
@@ -22,7 +23,6 @@ class RestartTestAdapter(BasePlatformAdapter):
 
     async def send(self, chat_id, content, reply_to=None, metadata=None):
         self.sent.append(content)
-        self.sent_calls.append((chat_id, content, metadata))
         return SendResult(success=True, message_id="1")
 
     async def send_typing(self, chat_id, metadata=None):
@@ -32,17 +32,12 @@ class RestartTestAdapter(BasePlatformAdapter):
         return {"id": chat_id}
 
 
-def make_restart_source(
-    chat_id: str = "123456",
-    chat_type: str = "dm",
-    thread_id: str | None = None,
-) -> SessionSource:
+def make_restart_source(chat_id: str = "123456", chat_type: str = "dm") -> SessionSource:
     return SessionSource(
         platform=Platform.TELEGRAM,
         chat_id=chat_id,
         chat_type=chat_type,
         user_id="u1",
-        thread_id=thread_id,
     )
 
 
@@ -59,9 +54,11 @@ def make_restart_runner(
     runner._exit_code = None
     runner._running_agents = {}
     runner._running_agents_ts = {}
+    runner._running_turns = {}
     runner._pending_messages = {}
     runner._pending_approvals = {}
     runner._pending_model_notes = {}
+    runner._pending_auto_restart_reason = None
     runner._background_tasks = set()
     runner._draining = False
     runner._restart_requested = False
@@ -74,6 +71,8 @@ def make_restart_runner(
     runner._update_prompt_pending = {}
     runner._voice_mode = {}
     runner._session_model_overrides = {}
+    runner._agent_cache = OrderedDict()
+    runner._agent_cache_lock = threading.Lock()
     runner._shutdown_all_gateway_honcho = lambda: None
     runner._update_runtime_status = MagicMock()
     runner._queue_or_replace_pending_event = GatewayRunner._queue_or_replace_pending_event.__get__(
@@ -88,15 +87,6 @@ def make_restart_runner(
     runner._handle_restart_command = GatewayRunner._handle_restart_command.__get__(
         runner, GatewayRunner
     )
-    runner._handle_set_home_command = GatewayRunner._handle_set_home_command.__get__(
-        runner, GatewayRunner
-    )
-    runner._send_restart_notification = GatewayRunner._send_restart_notification.__get__(
-        runner, GatewayRunner
-    )
-    runner._send_home_channel_startup_notifications = (
-        GatewayRunner._send_home_channel_startup_notifications.__get__(runner, GatewayRunner)
-    )
     runner._status_action_label = GatewayRunner._status_action_label.__get__(
         runner, GatewayRunner
     )
@@ -104,6 +94,15 @@ def make_restart_runner(
         runner, GatewayRunner
     )
     runner._queue_during_drain_enabled = GatewayRunner._queue_during_drain_enabled.__get__(
+        runner, GatewayRunner
+    )
+    runner._is_idle_for_auto_restart = GatewayRunner._is_idle_for_auto_restart.__get__(
+        runner, GatewayRunner
+    )
+    runner._schedule_auto_code_restart = GatewayRunner._schedule_auto_code_restart.__get__(
+        runner, GatewayRunner
+    )
+    runner._maybe_request_pending_auto_restart = GatewayRunner._maybe_request_pending_auto_restart.__get__(
         runner, GatewayRunner
     )
     runner._running_agent_count = GatewayRunner._running_agent_count.__get__(

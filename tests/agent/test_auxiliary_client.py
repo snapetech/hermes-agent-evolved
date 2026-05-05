@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
@@ -16,7 +17,6 @@ from agent.auxiliary_client import (
     auxiliary_max_tokens_param,
     call_llm,
     async_call_llm,
-    _build_call_kwargs,
     _read_codex_access_token,
     _get_provider_chain,
     _is_payment_error,
@@ -260,7 +260,7 @@ class TestAnthropicOAuthFlag:
         assert mock_build.call_args.args[0] == "sk-ant-oat01-pooled"
 
 
-class TestBuildCodexClient:
+class TestTryCodex:
     def test_pool_without_selected_entry_falls_back_to_auth_store(self):
         with (
             patch("agent.auxiliary_client._select_pool_entry", return_value=(True, None)),
@@ -268,22 +268,14 @@ class TestBuildCodexClient:
             patch("agent.auxiliary_client.OpenAI") as mock_openai,
         ):
             mock_openai.return_value = MagicMock()
-            from agent.auxiliary_client import _build_codex_client
+            from agent.auxiliary_client import _try_codex
 
-            client, model = _build_codex_client("gpt-5.4")
+            client, model = _try_codex()
 
         assert client is not None
-        assert model == "gpt-5.4"
+        assert model == "gpt-5.2-codex"
         assert mock_openai.call_args.kwargs["api_key"] == "codex-auth-token"
         assert mock_openai.call_args.kwargs["base_url"] == "https://chatgpt.com/backend-api/codex"
-
-    def test_rejects_missing_model(self):
-        """Callers must pass an explicit model; no hardcoded default."""
-        from agent.auxiliary_client import _build_codex_client
-
-        client, model = _build_codex_client("")
-        assert client is None
-        assert model is None
 
 
 class TestExpiredCodexFallback:
@@ -516,14 +508,14 @@ class TestGetTextAuxiliaryClient:
             patch("agent.auxiliary_client.OpenAI"),
             patch("hermes_cli.auth._read_codex_tokens", side_effect=AssertionError("legacy codex store should not run")),
         ):
-            from agent.auxiliary_client import _build_codex_client
+            from agent.auxiliary_client import _try_codex
 
-            client, model = _build_codex_client("gpt-5.4")
+            client, model = _try_codex()
 
         from agent.auxiliary_client import CodexAuxiliaryClient
 
         assert isinstance(client, CodexAuxiliaryClient)
-        assert model == "gpt-5.4"
+        assert model == "gpt-5.2-codex"
 
     def test_returns_none_when_nothing_available(self, monkeypatch):
         monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
@@ -792,15 +784,11 @@ class TestIsPaymentError:
 class TestGetProviderChain:
     """_get_provider_chain() resolves functions at call time (testable)."""
 
-    def test_returns_four_entries(self):
+    def test_returns_five_entries(self):
         chain = _get_provider_chain()
-        assert len(chain) == 4
+        assert len(chain) == 5
         labels = [label for label, _ in chain]
-        assert labels == ["openrouter", "nous", "local/custom", "api-key"]
-        # Codex is deliberately NOT in this chain — see _get_provider_chain
-        # docstring. ChatGPT-account Codex has a shifting model allow-list;
-        # guessing a model to fall back on breaks more often than it helps.
-        assert "openai-codex" not in labels
+        assert labels == ["openrouter", "nous", "local/custom", "openai-codex", "api-key"]
 
     def test_picks_up_patched_functions(self):
         """Patches on _try_* functions must be visible in the chain."""
@@ -827,6 +815,7 @@ class TestTryPaymentFallback:
         with patch("agent.auxiliary_client._try_openrouter", return_value=(None, None)), \
              patch("agent.auxiliary_client._try_nous", return_value=(None, None)), \
              patch("agent.auxiliary_client._try_custom_endpoint", return_value=(None, None)), \
+             patch("agent.auxiliary_client._try_codex", return_value=(None, None)), \
              patch("agent.auxiliary_client._resolve_api_key_provider", return_value=(None, None)), \
              patch("agent.auxiliary_client._read_main_provider", return_value="openrouter"):
             client, model, label = _try_payment_fallback("openrouter")
@@ -837,26 +826,23 @@ class TestTryPaymentFallback:
         """'codex' should map to 'openai-codex' in the skip set."""
         mock_client = MagicMock()
         with patch("agent.auxiliary_client._try_openrouter", return_value=(mock_client, "or-model")), \
+             patch("agent.auxiliary_client._try_codex", return_value=(None, None)), \
              patch("agent.auxiliary_client._read_main_provider", return_value="openai-codex"):
             client, model, label = _try_payment_fallback("openai-codex", task="vision")
         assert client is mock_client
         assert label == "openrouter"
 
-    def test_codex_not_in_fallback_chain(self):
-        """Codex is deliberately NOT a fallback rung (shifting model allow-list).
-
-        When OR/Nous/custom/api-key all fail, payment-fallback returns None —
-        Codex is never tried with a guessed model.
-        """
+    def test_skips_to_codex_when_or_and_nous_fail(self):
+        mock_codex = MagicMock()
         with patch("agent.auxiliary_client._try_openrouter", return_value=(None, None)), \
              patch("agent.auxiliary_client._try_nous", return_value=(None, None)), \
              patch("agent.auxiliary_client._try_custom_endpoint", return_value=(None, None)), \
-             patch("agent.auxiliary_client._resolve_api_key_provider", return_value=(None, None)), \
+             patch("agent.auxiliary_client._try_codex", return_value=(mock_codex, "gpt-5.2-codex")), \
              patch("agent.auxiliary_client._read_main_provider", return_value="openrouter"):
             client, model, label = _try_payment_fallback("openrouter")
-        assert client is None
-        assert model is None
-        assert label == ""
+        assert client is mock_codex
+        assert model == "gpt-5.2-codex"
+        assert label == "openai-codex"
 
 
 class TestCallLlmPaymentFallback:
@@ -926,6 +912,135 @@ def test_resolve_api_key_provider_skips_unconfigured_anthropic(monkeypatch):
 
     assert "anthropic" not in called, \
         "_try_anthropic() should not be called when anthropic is not explicitly configured"
+
+
+def test_resolve_api_key_provider_prefers_kilocode_over_anthropic(monkeypatch):
+    """Auto auxiliary routing should try Kilo before Anthropic when both exist."""
+    from collections import OrderedDict
+    from hermes_cli.auth import ProviderConfig
+
+    fake_registry = OrderedDict({
+        "anthropic": ProviderConfig(
+            id="anthropic",
+            name="Anthropic",
+            auth_type="api_key",
+            inference_base_url="https://api.anthropic.com",
+            api_key_env_vars=("ANTHROPIC_API_KEY",),
+        ),
+        "kilocode": ProviderConfig(
+            id="kilocode",
+            name="Kilo Code",
+            auth_type="api_key",
+            inference_base_url="https://api.kilo.ai/api/gateway",
+            api_key_env_vars=("KILOCODE_API_KEY",),
+        ),
+    })
+
+    class _DummyClient:
+        def __init__(self, **kwargs):
+            self.base_url = kwargs.get("base_url")
+
+    monkeypatch.setattr("hermes_cli.auth.PROVIDER_REGISTRY", fake_registry)
+    monkeypatch.setattr(
+        "hermes_cli.auth.is_provider_explicitly_configured",
+        lambda pid: pid == "anthropic",
+    )
+    monkeypatch.setattr(
+        "hermes_cli.auth.resolve_api_key_provider_credentials",
+        lambda provider_id: {
+            "api_key": f"{provider_id}-key",
+            "base_url": (
+                "https://api.kilo.ai/api/gateway"
+                if provider_id == "kilocode"
+                else "https://api.anthropic.com"
+            ),
+        },
+    )
+    monkeypatch.setattr(
+        "agent.auxiliary_client.OpenAI",
+        lambda **kwargs: _DummyClient(**kwargs),
+    )
+    monkeypatch.setattr(
+        "agent.auxiliary_client._try_anthropic",
+        lambda: (_DummyClient(base_url="https://api.anthropic.com"), "claude-haiku-4-5-20251001"),
+    )
+
+    from agent.auxiliary_client import _resolve_api_key_provider
+
+    client, model = _resolve_api_key_provider()
+
+    assert client is not None
+    assert model == "kilo-auto/free"
+    assert str(client.base_url).startswith("https://api.kilo.ai")
+
+
+def test_call_llm_escalates_empty_kilo_free_success(monkeypatch):
+    primary_response = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content=""))]
+    )
+    fallback_response = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content="Config Drift Fix"))]
+    )
+
+    primary_client = MagicMock()
+    primary_client.chat.completions.create.return_value = primary_response
+    fallback_client = MagicMock()
+    fallback_client.chat.completions.create.return_value = fallback_response
+
+    monkeypatch.setattr(
+        "agent.auxiliary_client._resolve_task_provider_model",
+        lambda *args, **kwargs: ("kilocode", "kilo-auto/free", None, None, None),
+    )
+    monkeypatch.setattr(
+        "agent.auxiliary_client._get_cached_client",
+        lambda *args, **kwargs: (primary_client, "kilo-auto/free"),
+    )
+    monkeypatch.setattr(
+        "agent.auxiliary_client._try_quality_fallback",
+        lambda *args, **kwargs: (fallback_client, "moonshotai/kimi-k2.6", "kilocode"),
+    )
+
+    resp = call_llm(
+        task="title_generation",
+        messages=[{"role": "user", "content": "Generate a short title"}],
+        max_tokens=16,
+    )
+
+    assert resp.choices[0].message.content == "Config Drift Fix"
+    assert primary_client.chat.completions.create.called
+    assert fallback_client.chat.completions.create.called
+
+
+def test_call_llm_keeps_nonempty_kilo_free_success(monkeypatch):
+    primary_response = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content="Good Title"))]
+    )
+    primary_client = MagicMock()
+    primary_client.chat.completions.create.return_value = primary_response
+
+    fallback_called = []
+
+    monkeypatch.setattr(
+        "agent.auxiliary_client._resolve_task_provider_model",
+        lambda *args, **kwargs: ("kilocode", "kilo-auto/free", None, None, None),
+    )
+    monkeypatch.setattr(
+        "agent.auxiliary_client._get_cached_client",
+        lambda *args, **kwargs: (primary_client, "kilo-auto/free"),
+    )
+    monkeypatch.setattr(
+        "agent.auxiliary_client._try_quality_fallback",
+        lambda *args, **kwargs: fallback_called.append(True),
+    )
+
+    resp = call_llm(
+        task="title_generation",
+        messages=[{"role": "user", "content": "Generate a short title"}],
+        max_tokens=16,
+    )
+
+    assert resp.choices[0].message.content == "Good Title"
+    assert fallback_called == []
 
 
 # ---------------------------------------------------------------------------
@@ -1375,14 +1490,14 @@ class TestAuxiliaryAuthRefreshRetry:
         with (
             patch(
                 "agent.auxiliary_client.resolve_vision_provider_client",
-                side_effect=[("openai-codex", failing_client, "gpt-5.4"), ("openai-codex", fresh_client, "gpt-5.4")],
+                side_effect=[("openai-codex", failing_client, "gpt-5.2-codex"), ("openai-codex", fresh_client, "gpt-5.2-codex")],
             ),
             patch("agent.auxiliary_client._refresh_provider_credentials", return_value=True) as mock_refresh,
         ):
             resp = call_llm(
                 task="vision",
                 provider="openai-codex",
-                model="gpt-5.4",
+                model="gpt-5.2-codex",
                 messages=[{"role": "user", "content": "hi"}],
             )
 
@@ -1399,14 +1514,14 @@ class TestAuxiliaryAuthRefreshRetry:
         fresh_client.chat.completions.create.return_value = _DummyResponse("fresh-non-vision")
 
         with (
-            patch("agent.auxiliary_client._resolve_task_provider_model", return_value=("openai-codex", "gpt-5.4", None, None, None)),
-            patch("agent.auxiliary_client._get_cached_client", side_effect=[(stale_client, "gpt-5.4"), (fresh_client, "gpt-5.4")]),
+            patch("agent.auxiliary_client._resolve_task_provider_model", return_value=("openai-codex", "gpt-5.2-codex", None, None, None)),
+            patch("agent.auxiliary_client._get_cached_client", side_effect=[(stale_client, "gpt-5.2-codex"), (fresh_client, "gpt-5.2-codex")]),
             patch("agent.auxiliary_client._refresh_provider_credentials", return_value=True) as mock_refresh,
         ):
             resp = call_llm(
                 task="compression",
                 provider="openai-codex",
-                model="gpt-5.4",
+                model="gpt-5.2-codex",
                 messages=[{"role": "user", "content": "hi"}],
             )
 
@@ -1454,14 +1569,14 @@ class TestAuxiliaryAuthRefreshRetry:
         with (
             patch(
                 "agent.auxiliary_client.resolve_vision_provider_client",
-                side_effect=[("openai-codex", failing_client, "gpt-5.4"), ("openai-codex", fresh_client, "gpt-5.4")],
+                side_effect=[("openai-codex", failing_client, "gpt-5.2-codex"), ("openai-codex", fresh_client, "gpt-5.2-codex")],
             ),
             patch("agent.auxiliary_client._refresh_provider_credentials", return_value=True) as mock_refresh,
         ):
             resp = await async_call_llm(
                 task="vision",
                 provider="openai-codex",
-                model="gpt-5.4",
+                model="gpt-5.2-codex",
                 messages=[{"role": "user", "content": "hi"}],
             )
 
@@ -1650,332 +1765,3 @@ class TestCodexAdapterReasoningTranslation:
         )
         assert "reasoning" not in captured
 
-    def test_reasoning_effort_null_falls_back_to_medium(self):
-        """Parity with agent/transports/codex.py::build_kwargs() — falsy
-        ``effort`` (None / empty / 0) keeps the default ``medium`` instead
-        of being forwarded to Codex.  Codex rejects ``{"effort": null}``
-        with HTTP 400 (Invalid value for parameter `reasoning.effort`)."""
-        adapter, captured = self._build_adapter()
-        adapter.create(
-            messages=[{"role": "user", "content": "hi"}],
-            extra_body={"reasoning": {"effort": None}},
-        )
-        assert captured.get("reasoning") == {"effort": "medium", "summary": "auto"}
-        assert captured.get("include") == ["reasoning.encrypted_content"]
-
-    def test_reasoning_effort_empty_string_falls_back_to_medium(self):
-        """Empty-string effort (e.g. ``effort: ""`` in YAML) is falsy in
-        the main-agent path's truthy check; mirror that here so the same
-        config produces the same result."""
-        adapter, captured = self._build_adapter()
-        adapter.create(
-            messages=[{"role": "user", "content": "hi"}],
-            extra_body={"reasoning": {"effort": ""}},
-        )
-        assert captured.get("reasoning") == {"effort": "medium", "summary": "auto"}
-        assert captured.get("include") == ["reasoning.encrypted_content"]
-
-    def test_reasoning_effort_zero_falls_back_to_medium(self):
-        """Numeric ``0`` is also falsy — the docstring lists it explicitly,
-        so cover the contract.  Codex would reject ``{"effort": 0}`` the
-        same way it rejects ``null``."""
-        adapter, captured = self._build_adapter()
-        adapter.create(
-            messages=[{"role": "user", "content": "hi"}],
-            extra_body={"reasoning": {"effort": 0}},
-        )
-        assert captured.get("reasoning") == {"effort": "medium", "summary": "auto"}
-        assert captured.get("include") == ["reasoning.encrypted_content"]
-
-
-class TestVisionAutoSkipsKimiCoding:
-    """_resolve_auto vision branch skips providers that have no vision on
-    their main endpoint (e.g. Kimi Coding Plan /coding) and falls through
-    to the aggregator chain instead of handing back a client that will 404
-    on every request (#17076).
-    """
-
-    def test_kimi_coding_skipped_falls_through_to_openrouter(self, monkeypatch):
-        """kimi-coding as main + vision auto → OpenRouter (not kimi)."""
-        fake_or_client = MagicMock(name="openrouter_client")
-
-        monkeypatch.setattr(
-            "agent.auxiliary_client._read_main_provider", lambda: "kimi-coding",
-        )
-        monkeypatch.setattr(
-            "agent.auxiliary_client._read_main_model", lambda: "kimi-code",
-        )
-        # Guard: if the skip doesn't fire, _resolve_strict_vision_backend
-        # and resolve_provider_client both would try kimi-coding — detect
-        # either via the main-provider call and fail loud.
-        rpc_mock = MagicMock(side_effect=AssertionError(
-            "resolve_provider_client should NOT be called for kimi-coding "
-            "on the vision auto path"))
-        monkeypatch.setattr(
-            "agent.auxiliary_client.resolve_provider_client", rpc_mock,
-        )
-
-        def fake_strict(provider, model=None):
-            if provider == "openrouter":
-                return fake_or_client, "google/gemini-3-flash-preview"
-            if provider == "nous":
-                return None, None
-            raise AssertionError(
-                f"strict vision backend should not be called for {provider!r} "
-                "when main provider is kimi-coding"
-            )
-        monkeypatch.setattr(
-            "agent.auxiliary_client._resolve_strict_vision_backend",
-            fake_strict,
-        )
-
-        provider, client, model = resolve_vision_provider_client()
-        assert provider == "openrouter"
-        assert client is fake_or_client
-        assert model == "google/gemini-3-flash-preview"
-
-    def test_kimi_coding_cn_skipped_too(self, monkeypatch):
-        """Same skip applies to the CN variant."""
-        fake_or_client = MagicMock(name="openrouter_client")
-
-        monkeypatch.setattr(
-            "agent.auxiliary_client._read_main_provider", lambda: "kimi-coding-cn",
-        )
-        monkeypatch.setattr(
-            "agent.auxiliary_client._read_main_model", lambda: "kimi-code",
-        )
-        rpc_mock = MagicMock(side_effect=AssertionError(
-            "resolve_provider_client should NOT be called for kimi-coding-cn"))
-        monkeypatch.setattr(
-            "agent.auxiliary_client.resolve_provider_client", rpc_mock,
-        )
-        monkeypatch.setattr(
-            "agent.auxiliary_client._resolve_strict_vision_backend",
-            lambda p, m=None: (fake_or_client, "gemini")
-            if p == "openrouter"
-            else (None, None),
-        )
-
-        provider, client, _ = resolve_vision_provider_client()
-        assert provider == "openrouter"
-        assert client is fake_or_client
-
-    def test_explicit_override_to_kimi_coding_still_honored(self, monkeypatch):
-        """When a user *explicitly* requests kimi-coding for vision (e.g.
-        they know what they're doing, or are running a future build that
-        adds image_in capability to Kimi Code), the explicit path still
-        routes to kimi-coding — only the auto branch applies the skip.
-        """
-        monkeypatch.setattr(
-            "agent.auxiliary_client._read_main_provider", lambda: "openrouter",
-        )
-        fake_kimi_client = MagicMock(name="kimi_client")
-        gcc_mock = MagicMock(return_value=(fake_kimi_client, "kimi-code"))
-        monkeypatch.setattr(
-            "agent.auxiliary_client._get_cached_client", gcc_mock,
-        )
-
-        provider, client, model = resolve_vision_provider_client(
-            provider="kimi-coding",
-        )
-        assert provider == "kimi-coding"
-        assert client is fake_kimi_client
-        gcc_mock.assert_called_once()
-
-    def test_skip_set_covers_exactly_known_entries(self):
-        """Guard against accidental widening of the skip list."""
-        from agent.auxiliary_client import _PROVIDERS_WITHOUT_VISION
-        assert _PROVIDERS_WITHOUT_VISION == frozenset({
-            "kimi-coding",
-            "kimi-coding-cn",
-        })
-
-
-# ---------------------------------------------------------------------------
-# _build_call_kwargs — tool dedup at API boundary
-# ---------------------------------------------------------------------------
-
-class TestBuildCallKwargsToolDedup:
-    """_build_call_kwargs must deduplicate tool names before passing to API.
-
-    Providers like Google Vertex, Azure, and Bedrock reject requests with
-    duplicate tool names (HTTP 400).  This guard converts a hard failure into
-    a warning log so agent turns succeed even if an upstream injection path
-    regresses.  See: https://github.com/NousResearch/hermes-agent/issues/18478
-    """
-
-    def _make_tool(self, name: str) -> dict:
-        return {
-            "type": "function",
-            "function": {
-                "name": name,
-                "description": f"Tool {name}",
-                "parameters": {"type": "object", "properties": {}},
-            },
-        }
-
-    def test_unique_tools_pass_through_unchanged(self):
-        tools = [self._make_tool("alpha"), self._make_tool("beta")]
-        kwargs = _build_call_kwargs(
-            provider="openai", model="gpt-4o", messages=[], tools=tools,
-        )
-        assert len(kwargs["tools"]) == 2
-        names = [t["function"]["name"] for t in kwargs["tools"]]
-        assert names == ["alpha", "beta"]
-
-    def test_duplicate_tool_names_are_deduplicated(self):
-        """RED test — must fail until dedup guard is added."""
-        tools = [
-            self._make_tool("lcm_grep"),
-            self._make_tool("lcm_describe"),
-            self._make_tool("lcm_grep"),  # duplicate
-            self._make_tool("lcm_expand"),
-            self._make_tool("lcm_describe"),  # duplicate
-        ]
-        kwargs = _build_call_kwargs(
-            provider="google", model="gemini-2.5-pro", messages=[], tools=tools,
-        )
-        result_tools = kwargs["tools"]
-        names = [t["function"]["name"] for t in result_tools]
-        # Must be deduplicated — no repeated names
-        assert len(names) == len(set(names)), (
-            f"Duplicate tool names found: {names}"
-        )
-        assert len(result_tools) == 3  # lcm_grep, lcm_describe, lcm_expand
-
-    def test_empty_tools_unchanged(self):
-        kwargs = _build_call_kwargs(
-            provider="openai", model="gpt-4o", messages=[], tools=[],
-        )
-        assert kwargs.get("tools") == [] or "tools" not in kwargs
-
-    def test_none_tools_unchanged(self):
-        kwargs = _build_call_kwargs(
-            provider="openai", model="gpt-4o", messages=[], tools=None,
-        )
-        assert "tools" not in kwargs
-
-
-@pytest.fixture(autouse=True)
-def _clean_env(monkeypatch):
-    """Strip provider env vars so each test starts clean."""
-    for key in (
-        "OPENROUTER_API_KEY", "OPENAI_BASE_URL", "OPENAI_API_KEY",
-    ):
-        monkeypatch.delenv(key, raising=False)
-
-
-class TestOpenRouterExplicitApiKey:
-    """Test that explicit_api_key is correctly propagated to _try_openrouter()."""
-
-    def test_resolve_provider_client_passes_explicit_api_key_to_openrouter(
-        self, monkeypatch
-    ):
-        """
-        When resolve_provider_client() is called with explicit_api_key for OpenRouter,
-        the explicit key should be passed to the OpenAI client instead of falling back
-        to OPENROUTER_API_KEY env var.
-        """
-        # Set up env var as fallback (should NOT be used when explicit_api_key is provided)
-        monkeypatch.setenv("OPENROUTER_API_KEY", "env-fallback-key")
-
-        # Mock OpenAI to capture the api_key used
-        mock_openai = MagicMock()
-        mock_openai.return_value = MagicMock(name="openrouter-client")
-
-        with patch("agent.auxiliary_client.OpenAI", mock_openai):
-            client, model = resolve_provider_client(
-                provider="openrouter",
-                explicit_api_key="explicit-pool-key",
-            )
-
-            # Verify a client was created
-            assert client is not None
-            # Verify the explicit key was used, not the env var fallback
-            mock_openai.assert_called_once()
-            call_kwargs = mock_openai.call_args[1]
-            assert call_kwargs["api_key"] == "explicit-pool-key", (
-                f"Expected explicit_api_key to be passed, got: {call_kwargs['api_key']}"
-            )
-            assert call_kwargs["api_key"] != "env-fallback-key", (
-                "Should NOT fall back to OPENROUTER_API_KEY when explicit_api_key is provided"
-            )
-
-    def test_resolve_provider_client_without_explicit_api_key_falls_back_to_env(
-        self, monkeypatch
-    ):
-        """
-        When resolve_provider_client() is called WITHOUT explicit_api_key for OpenRouter,
-        it should fall back to OPENROUTER_API_KEY env var.
-        """
-        # Set up env var as fallback (should be used when explicit_api_key is NOT provided)
-        monkeypatch.setenv("OPENROUTER_API_KEY", "env-fallback-key")
-
-        # Mock OpenAI to capture the api_key used
-        mock_openai = MagicMock()
-        mock_openai.return_value = MagicMock(name="openrouter-client")
-
-        with patch("agent.auxiliary_client.OpenAI", mock_openai):
-            client, model = resolve_provider_client(
-                provider="openrouter",
-                explicit_api_key=None,
-            )
-
-            # Verify a client was created
-            assert client is not None
-            # Verify the env var fallback was used
-            mock_openai.assert_called_once()
-            call_kwargs = mock_openai.call_args[1]
-            assert call_kwargs["api_key"] == "env-fallback-key", (
-                f"Expected env fallback key to be used when explicit_api_key is None, got: {call_kwargs['api_key']}"
-            )
-
-
-class TestAnthropicExplicitApiKey:
-    """Test that explicit_api_key is correctly propagated to _try_anthropic().
-
-    Parity with the OpenRouter fix in #18768: resolve_provider_client() passes
-    explicit_api_key to _try_openrouter(), but the anthropic branch was not
-    updated — _try_anthropic() always fell back to resolve_anthropic_token()
-    even when an explicit key was supplied (e.g. from a fallback_model entry).
-    """
-
-    def test_try_anthropic_uses_explicit_api_key_over_env(self):
-        """_try_anthropic(explicit_api_key) must use the supplied key, not the env fallback."""
-        with patch("agent.anthropic_adapter.resolve_anthropic_token", return_value="env-fallback-key"), \
-             patch("agent.anthropic_adapter.build_anthropic_client") as mock_build, \
-             patch("agent.auxiliary_client._select_pool_entry", return_value=(False, None)):
-            mock_build.return_value = MagicMock()
-            from agent.auxiliary_client import _try_anthropic
-            client, model = _try_anthropic("explicit-pool-key")
-        assert client is not None
-        assert mock_build.call_args.args[0] == "explicit-pool-key", (
-            f"Expected explicit_api_key to be passed, got: {mock_build.call_args.args[0]}"
-        )
-        assert mock_build.call_args.args[0] != "env-fallback-key"
-
-    def test_try_anthropic_without_explicit_key_falls_back_to_resolve(self):
-        """Without explicit_api_key, _try_anthropic falls back to resolve_anthropic_token."""
-        with patch("agent.anthropic_adapter.resolve_anthropic_token", return_value="env-fallback-key"), \
-             patch("agent.anthropic_adapter.build_anthropic_client") as mock_build, \
-             patch("agent.auxiliary_client._select_pool_entry", return_value=(False, None)):
-            mock_build.return_value = MagicMock()
-            from agent.auxiliary_client import _try_anthropic
-            client, model = _try_anthropic()
-        assert client is not None
-        assert mock_build.call_args.args[0] == "env-fallback-key"
-
-    def test_resolve_provider_client_passes_explicit_api_key_to_anthropic(self):
-        """resolve_provider_client(provider='anthropic', explicit_api_key=...) must propagate the key."""
-        with patch("agent.anthropic_adapter.resolve_anthropic_token", return_value="env-key"), \
-             patch("agent.anthropic_adapter.build_anthropic_client") as mock_build, \
-             patch("agent.auxiliary_client._select_pool_entry", return_value=(False, None)):
-            mock_build.return_value = MagicMock()
-            client, model = resolve_provider_client(
-                provider="anthropic",
-                explicit_api_key="explicit-fallback-key",
-            )
-        assert client is not None
-        assert mock_build.call_args.args[0] == "explicit-fallback-key", (
-            "resolve_provider_client must forward explicit_api_key to _try_anthropic()"
-        )

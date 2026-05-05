@@ -1,0 +1,147 @@
+# Keep-Local Manifest
+#
+# Single source of truth for files whose local design we intentionally keep
+# during upstream syncs. Read by scripts/upstream_sync_triage.py.
+#
+# Policy: assume fresh upstream today. For each keep-local path, the reason
+# field must still answer yes to "would we still build it this way?". When
+# upstream provides a cleaner equivalent, move the entry to `adopt_upstream`
+# and delete the local design in that sync pass.
+#
+# See docs/upstream-sync-design-deltas.md for the prose rationale.
+
+version: 1
+updated: 2026-04-23
+
+# Design-sensitive files: conflicts here always warrant human review.
+# Touching these during a sync is never a one-line "accept theirs".
+design_sensitive:
+  - run_agent.py
+  - model_tools.py
+  - toolsets.py
+  - cli.py
+  - gateway/run.py
+  - gateway/status.py
+  - hermes_cli/gateway.py
+  - hermes_cli/config.py
+  - hermes_cli/commands.py
+  - agent/prompt_builder.py
+  - agent/context_compressor.py
+  - agent/model_metadata.py
+  - tools/approval.py
+  - tools/delegate_tool.py
+  - tools/mcp_tool.py
+  - tools/skills_sync.py
+  - "deploy/k8s/**"
+  - "deploy/**"
+  - Dockerfile
+  - scripts/install.sh
+
+# Keep-local: files where the fork's design is the authoritative version.
+# Upstream changes to these files should be reviewed but usually rejected.
+keep_local:
+  - path: gateway/run.py
+    reason: >
+      In-process reload + deferred-restart workflow, in-pod exit-code-75
+      restart, gateway drain hooks. Upstream has no equivalent for this pod
+      shape.
+  - path: gateway/status.py
+    reason: >
+      Runtime visibility (reload/restart pending state exposed via API health
+      and gateway hooks). Used by CLI+TUI.
+  - path: hermes_cli/gateway.py
+    reason: >
+      Pod-aware gateway lifecycle commands (idle-boundary restart, pid checks,
+      skills-sync hints).
+  - path: agent/prompt_builder.py
+    reason: >
+      Fork adds explicit temporal anchors for date-sensitive maintenance, and
+      carries Hindsight/edge-watch integration hooks upstream does not have.
+  - path: tools/skills_sync.py
+    reason: >
+      Pod repo-first sync policy — `/opt/data/hermes-agent` treated as
+      read-only deployment knowledge, canonical writable checkout at
+      `/opt/data/workspace/hermes-agent-private`.
+  - path: "deploy/k8s/**"
+    reason: >
+      Entire Kubernetes overlay: Dockerfile.sudo, llama-admission-proxy,
+      Hindsight, Edge-Watch MCP, shared-memory MCP, desktop bridge MCP,
+      self-improvement cron, stack-CVE checkup. All fork-specific.
+  - path: "plugins/mission-loop/**"
+    reason: Snapetech mission-loop plugin (not upstream).
+  - path: "plugins/level-up/**"
+    reason: Snapetech level-up plugin with boot check + correction guard.
+  - path: "plugins/runtime-control/**"
+    reason: Snapetech runtime-control plugin (reload/restart surface).
+  - path: "plugins/disk-cleanup/**"
+    reason: Snapetech disk-cleanup plugin.
+  - path: "plugins/ops-runtime/**"
+    reason: Snapetech ops dashboard.
+  - path: "plugins/strike-freedom-cockpit/**"
+    reason: Snapetech cockpit dashboard.
+  - path: "docs/upstream-sync*.md"
+    reason: Fork policy docs.
+  - path: "docs/evolved-*.md"
+    reason: Fork design decision logs.
+  - path: "docs/keep-local-manifest.yaml"
+    reason: This file.
+  - path: "docs/reproducibility*.md"
+    reason: Fork reproducibility matrix.
+  - path: "docs/stack-*.md"
+    reason: Generated CVE/inventory reports.
+  - path: "docs/stack-*.json"
+    reason: Generated inventory artifacts.
+  - path: "docs/fork-evaluation-*.md"
+    reason: Fork audit reports.
+  - path: "docs/upstream-contribution-queue.md"
+    reason: Backport queue.
+  - path: "docs/changelog-discipline.md"
+    reason: Fork ledger policy.
+  - path: "docs/nous-discord-monitoring.md"
+    reason: Fork-specific Discord monitor policy.
+  - path: "docs/research-update-cycles.md"
+    reason: Fork-specific research cadence.
+  - path: "docs/validator_signal_roadmap_*.md"
+    reason: Fork validator-signal roadmaps.
+  - path: HERMES_CHANGELOG.md
+    reason: Fork audit ledger.
+  - path: FORK.md
+    reason: Fork preamble.
+  - path: CVE_TRIAGE.md
+    reason: Fork CVE decisions.
+  - path: "scripts/publish_evolved_repo.sh"
+    reason: Public mirror publisher (fork-only).
+  - path: "scripts/upstream_sync_*.{sh,py}"
+    reason: Fork sync tooling.
+  - path: "scripts/upstream_sync_triage.py"
+    reason: Triage generator.
+  - path: "scripts/install-git-hooks.sh"
+    reason: Fork hook installer.
+  - path: "scripts/hooks/**"
+    reason: Fork git-hook templates.
+  - path: "scripts/check_changelog.sh"
+    reason: Ledger discipline helper.
+  - path: ".github/workflows/deploy-hermes-local.yml"
+    reason: Fork-gated self-hosted k3s deploy.
+  - path: ".github/workflows/publish-evolved.yml"
+    reason: Fork-gated public-mirror publish.
+  - path: ".github/workflows/upstream-sync-report.yml"
+    reason: Fork-gated drift-report cron.
+
+# Files where we deliberately track upstream and re-adopt on every sync.
+# Do not add fork customizations to these — push them to plugins/hooks instead.
+adopt_upstream:
+  - README.md
+  - AGENTS.md
+  - CONTRIBUTING.md
+  - SECURITY.md
+  - LICENSE
+  - .env.example
+  - docker/SOUL.md
+  - cli.py
+  - run_agent.py
+  - hermes_state.py
+  - model_tools.py
+  - toolsets.py
+  - hermes_cli/main.py
+  - website/**

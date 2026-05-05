@@ -10,7 +10,7 @@ class TestTokenValidation:
 
     def test_classic_pat_rejected(self):
         from hermes_cli.copilot_auth import validate_copilot_token
-        valid, msg = validate_copilot_token("ghp_abcdefghijklmnop1234")
+        valid, msg = validate_copilot_token("GITHUB_TOKEN_PLACEHOLDER")
         assert valid is False
         assert "Classic Personal Access Tokens" in msg
         assert "ghp_" in msg
@@ -20,10 +20,11 @@ class TestTokenValidation:
         valid, msg = validate_copilot_token("gho_abcdefghijklmnop1234")
         assert valid is True
 
-    def test_fine_grained_pat_accepted(self):
+    def test_fine_grained_pat_rejected(self):
         from hermes_cli.copilot_auth import validate_copilot_token
-        valid, msg = validate_copilot_token("github_pat_abcdefghijklmnop1234")
-        assert valid is True
+        valid, msg = validate_copilot_token("GITHUB_TOKEN_PLACEHOLDER")
+        assert valid is False
+        assert "Fine-grained Personal Access Tokens" in msg
 
     def test_github_app_token_accepted(self):
         from hermes_cli.copilot_auth import validate_copilot_token
@@ -34,6 +35,12 @@ class TestTokenValidation:
         from hermes_cli.copilot_auth import validate_copilot_token
         valid, msg = validate_copilot_token("")
         assert valid is False
+
+    def test_unsupported_token_rejected(self):
+        from hermes_cli.copilot_auth import validate_copilot_token
+        valid, msg = validate_copilot_token("not-a-real-github-token")
+        assert valid is False
+        assert "Unsupported Copilot token type" in msg
 
 
 
@@ -75,6 +82,16 @@ class TestResolveToken:
         monkeypatch.setenv("GITHUB_TOKEN", "gho_valid_oauth")
         token, source = resolve_copilot_token()
         # Should skip the ghp_ token and find the gho_ one
+        assert token == "gho_valid_oauth"
+        assert source == "GITHUB_TOKEN"
+
+    def test_fine_grained_pat_in_env_skipped(self, monkeypatch):
+        """Fine-grained PATs in env vars should be skipped, not returned."""
+        from hermes_cli.copilot_auth import resolve_copilot_token
+        monkeypatch.setenv("COPILOT_GITHUB_TOKEN", "github_pat_nope")
+        monkeypatch.delenv("GH_TOKEN", raising=False)
+        monkeypatch.setenv("GITHUB_TOKEN", "gho_valid_oauth")
+        token, source = resolve_copilot_token()
         assert token == "gho_valid_oauth"
         assert source == "GITHUB_TOKEN"
 

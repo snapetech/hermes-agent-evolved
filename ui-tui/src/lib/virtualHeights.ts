@@ -1,6 +1,5 @@
 import type { Msg } from '../types.js'
 
-import { transcriptBodyWidth } from './inputMetrics.js'
 import { boundedHistoryRenderText } from './text.js'
 
 const hashText = (text: string) => {
@@ -39,12 +38,7 @@ export const wrappedLines = (text: string, width: number) => {
 export const estimatedMsgHeight = (
   msg: Msg,
   cols: number,
-  {
-    compact,
-    details,
-    limitHistory = false,
-    userPrompt = ''
-  }: { compact: boolean; details: boolean; limitHistory?: boolean; userPrompt?: string }
+  { compact, details, limitHistory = false }: { compact: boolean; details: boolean; limitHistory?: boolean }
 ) => {
   if (msg.kind === 'intro') {
     return msg.info?.version ? 9 : 5
@@ -62,7 +56,7 @@ export const estimatedMsgHeight = (
     return Math.max(2, msg.todos.length + 2)
   }
 
-  const bodyWidth = transcriptBodyWidth(cols, msg.role, userPrompt)
+  const bodyWidth = Math.max(20, cols - 5)
   const text = msg.role === 'assistant' && limitHistory ? boundedHistoryRenderText(msg.text) : msg.text
   let h = wrappedLines(text || ' ', bodyWidth)
 

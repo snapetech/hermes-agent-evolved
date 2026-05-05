@@ -1,14 +1,14 @@
 ---
-title: "Gif Search — Search/download GIFs from Tenor via curl + jq"
+title: "Gif Search — Search and download GIFs from Tenor using curl"
 sidebar_label: "Gif Search"
-description: "Search/download GIFs from Tenor via curl + jq"
+description: "Search and download GIFs from Tenor using curl"
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
 # Gif Search
 
-Search/download GIFs from Tenor via curl + jq.
+Search and download GIFs from Tenor using curl. No dependencies beyond curl and jq. Useful for finding reaction GIFs, creating visual content, and sending GIFs in chat.
 
 ## Skill metadata
 
@@ -30,10 +30,6 @@ The following is the complete skill definition that Hermes loads when this skill
 # GIF Search (Tenor API)
 
 Search and download GIFs directly via the Tenor API using curl. No extra tools needed.
-
-## When to use
-
-Useful for finding reaction GIFs, creating visual content, and sending GIFs in chat.
 
 ## Setup
 

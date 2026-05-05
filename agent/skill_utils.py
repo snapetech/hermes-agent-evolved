@@ -24,7 +24,7 @@ PLATFORM_MAP = {
     "windows": "win32",
 }
 
-EXCLUDED_SKILL_DIRS = frozenset((".git", ".github", ".hub", ".archive"))
+EXCLUDED_SKILL_DIRS = frozenset((".git", ".github", ".hub"))
 
 # ── Lazy YAML loader ─────────────────────────────────────────────────────
 
@@ -200,9 +200,6 @@ def get_external_skills_dirs() -> List[Path]:
     if not isinstance(raw_dirs, list):
         return []
 
-    from hermes_constants import get_hermes_home
-
-    hermes_home = get_hermes_home()
     local_skills = get_skills_dir().resolve()
     seen: Set[Path] = set()
     result: List[Path] = []
@@ -213,12 +210,7 @@ def get_external_skills_dirs() -> List[Path]:
             continue
         # Expand ~ and environment variables
         expanded = os.path.expanduser(os.path.expandvars(entry))
-        p = Path(expanded)
-        # Resolve relative paths against HERMES_HOME, not cwd
-        if not p.is_absolute():
-            p = (hermes_home / p).resolve()
-        else:
-            p = p.resolve()
+        p = Path(expanded).resolve()
         if p == local_skills:
             continue
         if p in seen:
@@ -422,15 +414,17 @@ def resolve_skill_config_values(
 
 # ── Description extraction ────────────────────────────────────────────────
 
+SKILL_INDEX_MAX_DESCRIPTION_LENGTH = 1024
+
 
 def extract_skill_description(frontmatter: Dict[str, Any]) -> str:
-    """Extract a truncated description from parsed frontmatter."""
+    """Extract a description from parsed frontmatter for the skill index."""
     raw_desc = frontmatter.get("description", "")
     if not raw_desc:
         return ""
     desc = str(raw_desc).strip().strip("'\"")
-    if len(desc) > 60:
-        return desc[:57] + "..."
+    if len(desc) > SKILL_INDEX_MAX_DESCRIPTION_LENGTH:
+        return desc[: SKILL_INDEX_MAX_DESCRIPTION_LENGTH - 3] + "..."
     return desc
 
 
@@ -440,7 +434,7 @@ def extract_skill_description(frontmatter: Dict[str, Any]) -> str:
 def iter_skill_index_files(skills_dir: Path, filename: str):
     """Walk skills_dir yielding sorted paths matching *filename*.
 
-    Excludes ``.git``, ``.github``, ``.hub``, ``.archive`` directories.
+    Excludes ``.git``, ``.github``, ``.hub`` directories.
     """
     matches = []
     for root, dirs, files in os.walk(skills_dir, followlinks=True):

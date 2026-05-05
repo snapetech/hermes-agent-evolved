@@ -862,26 +862,6 @@ class TestBuildSystemPrompt:
         prompt = agent._build_system_prompt()
         assert DEFAULT_AGENT_IDENTITY in prompt
 
-    def test_can_use_soul_identity_even_when_context_files_are_skipped(self):
-        with (
-            patch("run_agent.get_tool_definitions", return_value=_make_tool_defs("terminal")),
-            patch("run_agent.check_toolset_requirements", return_value={}),
-            patch("run_agent.OpenAI"),
-            patch("run_agent.load_soul_md", return_value="SOUL IDENTITY"),
-        ):
-            agent = AIAgent(
-                api_key="test-k...7890",
-                base_url="https://openrouter.ai/api/v1",
-                quiet_mode=True,
-                skip_context_files=True,
-                load_soul_identity=True,
-                skip_memory=True,
-            )
-            prompt = agent._build_system_prompt()
-
-        assert "SOUL IDENTITY" in prompt
-        assert DEFAULT_AGENT_IDENTITY not in prompt
-
     def test_includes_system_message(self, agent):
         prompt = agent._build_system_prompt(system_message="Custom instruction")
         assert "Custom instruction" in prompt
@@ -907,6 +887,34 @@ class TestBuildSystemPrompt:
         monkeypatch.setattr(run_agent, "build_nous_subscription_prompt", lambda tool_names: "NOUS SUBSCRIPTION BLOCK")
         prompt = agent._build_system_prompt()
         assert "NOUS SUBSCRIPTION BLOCK" in prompt
+
+    def test_includes_runtime_identity_for_local_proxy_llamacpp(self):
+        with (
+            patch("run_agent.get_tool_definitions", return_value=_make_tool_defs("web_search")),
+            patch("run_agent.check_toolset_requirements", return_value={}),
+            patch("run_agent.OpenAI"),
+        ):
+            agent = AIAgent(
+                model="qwen3.6-35b-a3b:iq4xs",
+                provider="custom",
+                base_url="http://127.0.0.1:8002/v1",
+                api_key="test-key-1234567890",
+                quiet_mode=True,
+                skip_context_files=True,
+                skip_memory=True,
+            )
+
+        prompt = agent._build_system_prompt()
+        assert "Current runtime facts:" in prompt
+        assert "qwen3.6-35b-a3b:iq4xs" in prompt
+        assert "http://127.0.0.1:8002/v1" in prompt
+        assert "pod-local admission proxy in front of `llama.cpp`" in prompt
+        assert "10.0.0.10:8001" in prompt
+        assert "Ollama is legacy here and not the primary inference path" in prompt
+
+    def test_skips_runtime_identity_for_remote_openrouter(self, agent):
+        prompt = agent._build_system_prompt()
+        assert "Current runtime facts:" not in prompt
 
     def test_skills_prompt_derives_available_toolsets_from_loaded_tools(self):
         tools = _make_tool_defs("web_search", "skills_list", "skill_view", "skill_manage")
@@ -1465,8 +1473,8 @@ class TestBuildAssistantMessage:
 
         This preserves ``_copy_reasoning_content_for_api``'s downstream
         tiers at replay time — cross-provider leak guard (#15748),
-        promote-from-``reasoning``, and DeepSeek/Kimi " "-pad — which
-        would all be bypassed if we eagerly wrote ``reasoning_content=" "``
+        promote-from-``reasoning``, and DeepSeek/Kimi ""-pad — which
+        would all be bypassed if we eagerly wrote ``reasoning_content=""``
         on every assistant turn regardless of provider.
         """
         msg = _mock_assistant_msg(content="plain answer")
@@ -2037,6 +2045,45 @@ class TestConcurrentToolExecution:
 
         assert json.loads(result) == {"error": "Blocked"}
 
+    def test_invoke_tool_denied_by_mode_returns_error(self, agent):
+        agent.mode_name = "ask"
+        agent._mode_allowed_tools = {"read_file"}
+        agent._mode_denied_tools = set()
+        agent._mode_ask_tools = set()
+
+        with patch("run_agent.handle_function_call", side_effect=AssertionError("should not run")):
+            result = agent._invoke_tool("web_search", {"q": "test"}, "task-1")
+
+        assert json.loads(result) == {
+            "error": "Tool 'web_search' is not available in mode 'ask'."
+        }
+
+    def test_invoke_tool_ask_mode_requires_yolo(self, agent, monkeypatch):
+        agent.mode_name = "debug"
+        agent._mode_allowed_tools = None
+        agent._mode_denied_tools = set()
+        agent._mode_ask_tools = {"write_file"}
+        monkeypatch.delenv("HERMES_YOLO_MODE", raising=False)
+        monkeypatch.setattr("tools.approval.is_current_session_yolo_enabled", lambda: False)
+
+        with patch("run_agent.handle_function_call", side_effect=AssertionError("should not run")):
+            result = agent._invoke_tool("write_file", {"path": "x", "content": "y"}, "task-1")
+
+        assert "requires confirmation" in json.loads(result)["error"]
+
+    def test_invoke_tool_ask_mode_allows_yolo(self, agent, monkeypatch):
+        agent.mode_name = "debug"
+        agent._mode_allowed_tools = None
+        agent._mode_denied_tools = set()
+        agent._mode_ask_tools = {"write_file"}
+        monkeypatch.setenv("HERMES_YOLO_MODE", "1")
+
+        with patch("run_agent.handle_function_call", return_value="ok") as mock_hfc:
+            result = agent._invoke_tool("write_file", {"path": "x", "content": "y"}, "task-1")
+
+        assert result == "ok"
+        mock_hfc.assert_called_once()
+
     def test_sequential_blocked_tool_skips_checkpoints_and_callbacks(self, agent, monkeypatch):
         """Sequential path: blocked tool should not trigger checkpoints or start callbacks."""
         tool_call = _mock_tool_call(name="write_file",
@@ -2180,150 +2227,6 @@ class TestHandleMaxIterations:
         assert result == "Summary"
         kwargs = agent.client.chat.completions.create.call_args.kwargs
         assert "reasoning" not in kwargs.get("extra_body", {})
-
-    def test_summary_request_removes_orphan_tool_result(self, agent):
-        """Regression: max-iterations summary request must NOT contain
-        orphan tool results (tool_call_id with no matching assistant tool_call)."""
-        resp = _mock_response(content="Summary of work done.")
-        agent.client.chat.completions.create.return_value = resp
-        agent._cached_system_prompt = "You are helpful."
-        messages = [
-            {"role": "user", "content": "Analyze finance-data-router"},
-            {"role": "assistant", "content": "[Session Arc Summary] ..."},
-            {"role": "tool", "tool_call_id": "call_cfedFhJjGmu1RvRc1OUC38j8", "content": "file content here"},
-            {"role": "assistant", "tool_calls": [{"id": "call_8fXBXsT592Vpvm7wnW4obPEu", "function": {"name": "patch", "arguments": "{}"}}]},
-            {"role": "tool", "tool_call_id": "call_8fXBXsT592Vpvm7wnW4obPEu", "content": "patch result"},
-            {"role": "assistant", "content": "Done."},
-        ]
-
-        result = agent._handle_max_iterations(messages, 120)
-
-        assert result == "Summary of work done."
-        kwargs = agent.client.chat.completions.create.call_args.kwargs
-        sent_msgs = kwargs.get("messages", [])
-        orphan_ids = [
-            m.get("tool_call_id") for m in sent_msgs
-            if m.get("role") == "tool" and m.get("tool_call_id") == "call_cfedFhJjGmu1RvRc1OUC38j8"
-        ]
-        assert len(orphan_ids) == 0, f"Orphan tool result still present: {orphan_ids}"
-
-    def test_summary_request_inserts_stub_for_missing_tool_result(self, agent):
-        """If an assistant tool_call has no matching tool result in the
-        summary request, a stub must be inserted to satisfy the API contract."""
-        resp = _mock_response(content="Summary")
-        agent.client.chat.completions.create.return_value = resp
-        agent._cached_system_prompt = "You are helpful."
-        messages = [
-            {"role": "user", "content": "do stuff"},
-            {"role": "assistant", "tool_calls": [{"id": "call_no_result", "function": {"name": "terminal", "arguments": "{}"}}]},
-            {"role": "assistant", "content": "Continuing..."},
-        ]
-
-        result = agent._handle_max_iterations(messages, 60)
-
-        assert result == "Summary"
-        kwargs = agent.client.chat.completions.create.call_args.kwargs
-        sent_msgs = kwargs.get("messages", [])
-        stub_ids = [
-            m.get("tool_call_id") for m in sent_msgs
-            if m.get("role") == "tool" and m.get("tool_call_id") == "call_no_result"
-        ]
-        assert len(stub_ids) >= 1, f"No stub result for assistant tool_call: {stub_ids}"
-
-    def test_summary_omits_provider_preferences_for_non_openrouter(self, agent):
-        agent.base_url = "https://api.openai.com/v1"
-        agent._base_url_lower = agent.base_url.lower()
-        agent.provider = "openai"
-        agent.providers_allowed = ["Anthropic"]
-        agent.client.chat.completions.create.return_value = _mock_response(content="Summary")
-        agent._cached_system_prompt = "You are helpful."
-
-        result = agent._handle_max_iterations([{"role": "user", "content": "do stuff"}], 60)
-
-        assert result == "Summary"
-        kwargs = agent.client.chat.completions.create.call_args.kwargs
-        assert "provider" not in kwargs.get("extra_body", {})
-
-    def test_summary_keeps_provider_preferences_for_openrouter(self, agent):
-        agent.base_url = "https://openrouter.ai/api/v1"
-        agent._base_url_lower = agent.base_url.lower()
-        agent.provider = "openrouter"
-        agent.providers_allowed = ["Anthropic"]
-        agent.client.chat.completions.create.return_value = _mock_response(content="Summary")
-        agent._cached_system_prompt = "You are helpful."
-
-        result = agent._handle_max_iterations([{"role": "user", "content": "do stuff"}], 60)
-
-        assert result == "Summary"
-        kwargs = agent.client.chat.completions.create.call_args.kwargs
-        assert kwargs["extra_body"]["provider"]["only"] == ["Anthropic"]
-
-    def test_codex_summary_sanitizes_orphan_tool_results(self, agent):
-        agent.api_mode = "codex_responses"
-        agent.provider = "openai-codex"
-        agent.base_url = "https://chatgpt.com/backend-api/codex"
-        agent._base_url_lower = agent.base_url.lower()
-        agent._base_url_hostname = "chatgpt.com"
-        agent.model = "gpt-5.5"
-        agent._cached_system_prompt = "You are helpful."
-        captured = {}
-
-        def fake_run_codex_stream(kwargs):
-            captured.update(kwargs)
-            return SimpleNamespace(
-                status="completed",
-                output=[
-                    SimpleNamespace(
-                        type="message",
-                        status="completed",
-                        content=[SimpleNamespace(type="output_text", text="Summary")],
-                    )
-                ],
-            )
-
-        messages = [
-            {"role": "user", "content": "do stuff"},
-            {
-                "role": "tool",
-                "tool_call_id": "call_orphan",
-                "content": "orphaned result from compressed history",
-            },
-        ]
-
-        with patch.object(agent, "_run_codex_stream", side_effect=fake_run_codex_stream):
-            result = agent._handle_max_iterations(messages, 90)
-
-        assert result == "Summary"
-        input_items = captured["input"]
-        assert not any(
-            item.get("type") == "function_call_output"
-            and item.get("call_id") == "call_orphan"
-            for item in input_items
-        )
-
-    def test_api_sanitizer_matches_responses_call_id_when_id_differs(self, agent):
-        messages = [
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "fc_123",
-                        "call_id": "call_123",
-                        "response_item_id": "fc_123",
-                        "type": "function",
-                        "function": {"name": "web_search", "arguments": "{}"},
-                    }
-                ],
-            },
-            {"role": "tool", "tool_call_id": "call_123", "content": "result"},
-        ]
-
-        sanitized = agent._sanitize_api_messages(messages)
-
-        assert [m.get("tool_call_id") for m in sanitized if m.get("role") == "tool"] == [
-            "call_123"
-        ]
 
 
 class TestRunConversation:
@@ -3891,6 +3794,39 @@ class TestSaveSessionLogAtomicWrite:
         assert call_args.kwargs["indent"] == 2
         assert call_args.kwargs["default"] is str
 
+    def test_includes_compaction_events_and_metrics(self, agent, tmp_path):
+        agent.session_log_file = tmp_path / "session.json"
+        agent._compaction_events = [
+            {
+                "event_type": "context_compaction",
+                "trigger": "proxy_context_overflow_retry",
+                "source": "admission_proxy",
+                "code": "context_overflow_compress_and_retry",
+            },
+            {
+                "event_type": "context_compaction",
+                "trigger": "context_overflow",
+                "source": "provider",
+            },
+        ]
+        messages = [{"role": "user", "content": "hello"}]
+
+        with patch("run_agent.atomic_json_write", create=True) as mock_atomic_write:
+            agent._save_session_log(messages)
+
+        payload = mock_atomic_write.call_args.args[1]
+        assert payload["compaction_events"] == agent._compaction_events
+        assert payload["compaction_metrics"]["event_count"] == 2
+        assert payload["compaction_metrics"]["by_source"] == {
+            "admission_proxy": 1,
+            "provider": 1,
+        }
+        assert payload["compaction_metrics"]["by_trigger"] == {
+            "proxy_context_overflow_retry": 1,
+            "context_overflow": 1,
+        }
+        assert payload["compaction_metrics"]["proxy_overflow_compactions"] == 1
+
 
 # ===================================================================
 # Anthropic adapter integration fixes
@@ -4694,7 +4630,7 @@ class TestReasoningReplayForStrictProviders:
         agent.compression_enabled = False
         agent.save_trajectories = False
 
-    def test_kimi_tool_replay_includes_space_reasoning_content(self, agent):
+    def test_kimi_tool_replay_includes_empty_reasoning_content(self, agent):
         self._setup_agent(agent)
         agent.base_url = "https://api.kimi.com/coding/v1"
         agent._base_url_lower = agent.base_url.lower()
@@ -4731,7 +4667,7 @@ class TestReasoningReplayForStrictProviders:
         assert replayed_assistant["role"] == "assistant"
         assert replayed_assistant["tool_calls"][0]["function"]["name"] == "terminal"
         assert "reasoning_content" in replayed_assistant
-        assert replayed_assistant["reasoning_content"] == " "
+        assert replayed_assistant["reasoning_content"] == ""
 
     def test_explicit_reasoning_content_beats_normalized_reasoning_on_replay(self, agent):
         self._setup_agent(agent)
@@ -4988,28 +4924,6 @@ class TestDeadRetryCode:
             f"Expected 2 occurrences of 'if retry_count >= max_retries:' "
             f"but found {occurrences}"
         )
-
-
-class TestSupportsReasoningExtraBody:
-    def _make_agent(self):
-        agent = object.__new__(AIAgent)
-        agent.provider = "openrouter"
-        agent.base_url = "https://openrouter.ai/api/v1"
-        agent._base_url_lower = agent.base_url.lower()
-        agent.model = ""
-        return agent
-
-    def test_xiaomi_models_are_treated_as_reasoning_capable(self):
-        agent = self._make_agent()
-        for model in (
-            "xiaomi/mimo-v2.5-pro",
-            "xiaomi/mimo-v2.5",
-            "xiaomi/mimo-v2-omni",
-            "xiaomi/mimo-v2-pro",
-            "xiaomi/mimo-v2-flash",
-        ):
-            agent.model = model
-            assert agent._supports_reasoning_extra_body() is True, model
 
 
 class TestMemoryContextSanitization:

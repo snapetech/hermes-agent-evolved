@@ -107,58 +107,17 @@ def _run_async(coro):
         loop = None
 
     if loop and loop.is_running():
-        # Inside an async context (gateway, RL env) — run in a fresh thread
-        # with its own event loop we own a reference to, so on timeout we
-        # can cancel the task inside that loop (ThreadPoolExecutor.cancel()
-        # only works on not-yet-started futures — it's a no-op on a running
-        # worker, which previously leaked the thread on every 300 s timeout).
+        # Inside an async context (gateway, RL env) — run in a fresh thread.
         import concurrent.futures
-
-        worker_loop: Optional[asyncio.AbstractEventLoop] = None
-        loop_ready = threading.Event()
-
-        def _run_in_worker():
-            nonlocal worker_loop
-            worker_loop = asyncio.new_event_loop()
-            loop_ready.set()
-            try:
-                asyncio.set_event_loop(worker_loop)
-                return worker_loop.run_until_complete(coro)
-            finally:
-                try:
-                    # Cancel anything still pending (e.g. task cancelled
-                    # externally via call_soon_threadsafe on timeout).
-                    pending = asyncio.all_tasks(worker_loop)
-                    for t in pending:
-                        t.cancel()
-                    if pending:
-                        worker_loop.run_until_complete(
-                            asyncio.gather(*pending, return_exceptions=True)
-                        )
-                except Exception:
-                    pass
-                worker_loop.close()
-
         pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        future = pool.submit(_run_in_worker)
+        future = pool.submit(asyncio.run, coro)
         try:
             return future.result(timeout=300)
         except concurrent.futures.TimeoutError:
-            # Cancel the coroutine inside its own loop so the worker thread
-            # can wind down instead of running forever.
-            if loop_ready.wait(timeout=1.0) and worker_loop is not None:
-                try:
-                    for t in asyncio.all_tasks(worker_loop):
-                        worker_loop.call_soon_threadsafe(t.cancel)
-                except RuntimeError:
-                    # Loop already closed — nothing to cancel.
-                    pass
+            future.cancel()
             raise
         finally:
-            # wait=False: don't block the caller on a stuck coroutine. We've
-            # already requested cancellation above; the worker will exit
-            # once the coroutine observes it (usually at the next await).
-            pool.shutdown(wait=False)
+            pool.shutdown(wait=False, cancel_futures=True)
 
     # If we're on a worker thread (e.g., parallel tool execution in
     # delegate_task), use a per-thread persistent loop.  This avoids
@@ -320,15 +279,7 @@ def get_tool_definitions(
 
     result = _compute_tool_definitions(enabled_toolsets, disabled_toolsets, quiet_mode)
     if quiet_mode:
-        # Cache the freshly-computed list, but hand callers a shallow copy so
-        # downstream mutations (e.g. run_agent appending memory/LCM tool
-        # schemas to self.tools) don't poison the cache. Without this, a
-        # long-lived Gateway process accumulates duplicate tool names across
-        # agent inits and providers that enforce unique tool names
-        # (DeepSeek, Xiaomi MiMo, Moonshot Kimi) reject the request with
-        # HTTP 400. Mirrors the cache-hit path above. (issue #17335)
         _tool_defs_cache[cache_key] = result
-        return list(result)
     return result
 
 
@@ -356,17 +307,12 @@ def _compute_tool_definitions(
             else:
                 if not quiet_mode:
                     print(f"⚠️  Unknown toolset: {toolset_name}")
-    else:
-        # Default: start with everything
+
+    elif disabled_toolsets:
         from toolsets import get_all_toolsets
         for ts_name in get_all_toolsets():
             tools_to_include.update(resolve_toolset(ts_name))
 
-    # Always apply disabled toolsets as a subtraction step at the end.
-    # This ensures that even if a composite toolset (like hermes-cli)
-    # is enabled, any tools belonging to a disabled toolset are strictly
-    # stripped out. See issue #17309.
-    if disabled_toolsets:
         for toolset_name in disabled_toolsets:
             if validate_toolset(toolset_name):
                 resolved = resolve_toolset(toolset_name)
@@ -381,6 +327,10 @@ def _compute_tool_definitions(
             else:
                 if not quiet_mode:
                     print(f"⚠️  Unknown toolset: {toolset_name}")
+    else:
+        from toolsets import get_all_toolsets
+        for ts_name in get_all_toolsets():
+            tools_to_include.update(resolve_toolset(ts_name))
 
     # Plugin-registered tools are now resolved through the normal toolset
     # path — validate_toolset() / resolve_toolset() / get_all_toolsets()
@@ -511,12 +461,6 @@ def coerce_tool_args(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
 
     Handles ``"type": "integer"``, ``"type": "number"``, ``"type": "boolean"``,
     and union types (``"type": ["integer", "string"]``).
-
-    Also wraps bare scalar values in a single-element list when the schema
-    declares ``"type": "array"``.  Open-weight models (DeepSeek, Qwen, GLM)
-    sometimes emit ``{"urls": "https://a.com"}`` when the tool expects
-    ``{"urls": ["https://a.com"]}``; wrapping here avoids a confusing tool
-    failure on what is otherwise a well-formed call.
     """
     if not args or not isinstance(args, dict):
         return args
@@ -529,42 +473,13 @@ def coerce_tool_args(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     if not properties:
         return args
 
-    for key, value in list(args.items()):
+    for key, value in args.items():
+        if not isinstance(value, str):
+            continue
         prop_schema = properties.get(key)
         if not prop_schema:
             continue
         expected = prop_schema.get("type")
-
-        # Wrap bare non-list values when the schema declares ``array``.
-        # Strings still go through _coerce_value first so JSON-encoded
-        # arrays (``'["a","b"]'``) get parsed and nullable ``"null"``
-        # becomes ``None`` rather than ``["null"]``.
-        # ``None`` itself is preserved — we don't know whether the model
-        # meant "omit" or "empty list", and tools with sensible defaults
-        # (e.g. read_file's normalize_read_pagination) already handle it.
-        if expected == "array" and value is not None and not isinstance(value, (list, tuple)):
-            if isinstance(value, str):
-                coerced = _coerce_value(value, expected, schema=prop_schema)
-                if coerced is not value:
-                    # _coerce_value handled it (JSON-parsed list or
-                    # nullable "null" → None).
-                    args[key] = coerced
-                    continue
-                args[key] = [value]
-                logger.info(
-                    "coerce_tool_args: wrapped bare string in list for %s.%s",
-                    tool_name, key,
-                )
-                continue
-            args[key] = [value]
-            logger.info(
-                "coerce_tool_args: wrapped bare %s in list for %s.%s",
-                type(value).__name__, tool_name, key,
-            )
-            continue
-
-        if not isinstance(value, str):
-            continue
         if not expected and not _schema_allows_null(prop_schema):
             continue
         coerced = _coerce_value(value, expected, schema=prop_schema)
@@ -712,13 +627,6 @@ def handle_function_call(
         # Check plugin hooks for a block directive (unless caller already
         # checked — e.g. run_agent._invoke_tool passes skip=True to
         # avoid double-firing the hook).
-        #
-        # Single-fire contract: pre_tool_call fires exactly once per tool
-        # execution. get_pre_tool_call_block_message() internally calls
-        # invoke_hook("pre_tool_call", ...) and returns the first block
-        # directive (if any), so observer plugins see the hook on that same
-        # pass. When skip=True, the caller already fired it — do nothing
-        # here.
         if not skip_pre_tool_call_hook:
             block_message: Optional[str] = None
             try:
@@ -735,6 +643,21 @@ def handle_function_call(
 
             if block_message is not None:
                 return json.dumps({"error": block_message}, ensure_ascii=False)
+        else:
+            # Still fire the hook for observers — just don't check for blocking
+            # (the caller already did that).
+            try:
+                from hermes_cli.plugins import invoke_hook
+                invoke_hook(
+                    "pre_tool_call",
+                    tool_name=function_name,
+                    args=function_args,
+                    task_id=task_id or "",
+                    session_id=session_id or "",
+                    tool_call_id=tool_call_id or "",
+                )
+            except Exception:
+                pass
 
         # Notify the read-loop tracker when a non-read/search tool runs,
         # so the *consecutive* counter resets (reads after other work are fine).
@@ -814,7 +737,7 @@ def handle_function_call(
 
     except Exception as e:
         error_msg = f"Error executing {function_name}: {str(e)}"
-        logger.exception(error_msg)
+        logger.error(error_msg)
         return json.dumps({"error": error_msg}, ensure_ascii=False)
 
 

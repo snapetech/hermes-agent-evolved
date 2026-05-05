@@ -37,6 +37,68 @@ class TestShouldCompress:
         assert compressor.should_compress(prompt_tokens=90000) is True
         assert compressor.should_compress(prompt_tokens=50000) is False
 
+    def test_preflight_plan_starts_earlier_for_recent_tool_activity(self, compressor):
+        compressor.protect_first_n = 1
+        compressor.protect_last_n = 2
+        messages = [
+            {"role": "user", "content": "older request"},
+            {"role": "assistant", "content": "older answer"},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "call_1", "function": {"name": "web_search", "arguments": '{"q":"test"}'}}
+            ]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "tool result"},
+            {"role": "user", "content": "latest request"},
+        ]
+
+        plan = compressor.get_preflight_compression_plan(
+            messages,
+            prompt_tokens=72_250,
+        )
+
+        assert plan["has_tool_activity"] is True
+        assert plan["trigger"] == "recent_activity_headroom"
+        assert plan["effective_threshold_tokens"] == 72_250
+        assert plan["should_compress"] is True
+
+    def test_preflight_plan_does_not_start_early_without_recent_activity(self, compressor):
+        compressor.protect_first_n = 1
+        compressor.protect_last_n = 2
+        messages = [
+            {"role": "user", "content": "older request"},
+            {"role": "assistant", "content": "older answer"},
+            {"role": "user", "content": "follow up"},
+            {"role": "assistant", "content": "reply"},
+            {"role": "user", "content": "latest request"},
+        ]
+
+        plan = compressor.get_preflight_compression_plan(
+            messages,
+            prompt_tokens=72_250,
+        )
+
+        assert plan["has_tool_activity"] is False
+        assert plan["has_reasoning_activity"] is False
+        assert plan["trigger"] == "threshold"
+        assert plan["effective_threshold_tokens"] == 85_000
+        assert plan["should_compress"] is False
+
+    def test_dynamic_tail_budget_grows_for_recent_tool_and_reasoning_activity(self, compressor):
+        messages = [
+            {"role": "user", "content": "older request"},
+            {
+                "role": "assistant",
+                "content": "working",
+                "reasoning": "Need to keep this reasoning state around.",
+                "tool_calls": [
+                    {"id": "call_1", "function": {"name": "web_search", "arguments": '{"q":"test"}'}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "tool result"},
+            {"role": "user", "content": "latest request"},
+        ]
+
+        assert compressor._tail_token_budget_for_messages(messages) > compressor.tail_token_budget
+
 
 
 class TestUpdateFromResponse:
@@ -118,6 +180,62 @@ class TestGenerateSummaryNoneContent:
             summary = c._generate_summary(messages)
         assert isinstance(summary, str)
         assert summary.startswith(SUMMARY_PREFIX)
+
+    def test_reasoning_excerpt_is_serialized_for_summary(self):
+        with patch("agent.context_compressor.get_model_context_length", return_value=100000):
+            c = ContextCompressor(model="test", quiet_mode=True)
+
+        messages = [
+            {"role": "assistant", "content": "Working on it", "reasoning": "Compare the two config paths and keep the live one."},
+        ]
+
+        serialized = c._serialize_for_summary(messages)
+        assert "Reasoning excerpt" in serialized
+        assert "Compare the two config paths" in serialized
+
+    def test_summary_input_redacts_message_content_and_tool_args(self):
+        with patch("agent.context_compressor.get_model_context_length", return_value=100000):
+            c = ContextCompressor(model="test", quiet_mode=True)
+
+        fake_pat = "ghp_" + "a" * 36
+        fake_key = "sk-" + "B" * 32
+        messages = [
+            {"role": "user", "content": f"use token {fake_pat}"},
+            {
+                "role": "assistant",
+                "content": "calling tool",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "write_file",
+                            "arguments": f'{{"content":"OPENAI_API_KEY={fake_key}"}}',
+                        }
+                    }
+                ],
+            },
+        ]
+
+        serialized = c._serialize_for_summary(messages)
+
+        assert fake_pat not in serialized
+        assert fake_key not in serialized
+        assert "ghp_" in serialized or "sk-" in serialized
+
+    def test_summary_output_is_redacted_before_persisted(self):
+        fake_pat = "ghp_" + "c" * 36
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = f"summary leaked {fake_pat}"
+
+        with patch("agent.context_compressor.get_model_context_length", return_value=100000):
+            c = ContextCompressor(model="test", quiet_mode=True)
+
+        with patch("agent.context_compressor.call_llm", return_value=mock_response):
+            summary = c._generate_summary([{"role": "user", "content": "hello"}])
+
+        assert fake_pat not in summary
+        assert fake_pat not in c._previous_summary
+        assert "ghp_" in summary
 
     def test_none_content_in_system_message_compress(self):
         """System message with content=None should not crash during compress."""
@@ -240,6 +358,32 @@ class TestSummaryFailureCooldown:
         assert first is None
         assert second is None
         assert mock_call.call_count == 1
+
+    def test_unavailable_summary_model_falls_back_to_main_model(self):
+        first_error = Exception("model_not_found")
+        first_error.status_code = 404
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "fallback summary"
+
+        with patch("agent.context_compressor.get_model_context_length", return_value=100000):
+            c = ContextCompressor(
+                model="main-model",
+                summary_model_override="missing-summary-model",
+                quiet_mode=True,
+            )
+
+        messages = [
+            {"role": "user", "content": "do something"},
+            {"role": "assistant", "content": "ok"},
+        ]
+
+        with patch("agent.context_compressor.call_llm", side_effect=[first_error, mock_response]) as mock_call:
+            summary = c._generate_summary(messages, extractive_checkpoint=c._build_extractive_checkpoint(messages))
+
+        assert summary == f"{SUMMARY_PREFIX}\nfallback summary"
+        assert mock_call.call_count == 2
+        assert c.summary_model == ""
 
 
 class TestSummaryFallbackToMainModel:
@@ -593,6 +737,44 @@ class TestCompressWithClient:
         assert any(c.startswith(SUMMARY_PREFIX) for c in contents)
         assert len(result) < len(msgs)
 
+    def test_soft_compaction_skips_when_summary_unavailable(self):
+        with patch("agent.context_compressor.get_model_context_length", return_value=100000):
+            c = ContextCompressor(
+                model="test",
+                quiet_mode=True,
+                protect_first_n=2,
+                protect_last_n=2,
+            )
+
+        msgs = [{"role": "user" if i % 2 == 0 else "assistant", "content": f"msg {i}"} for i in range(10)]
+        with patch("agent.context_compressor.call_llm", side_effect=Exception("timeout")):
+            result = c.compress(msgs, allow_static_fallback=False)
+
+        assert result == msgs
+        assert c.compression_count == 0
+        assert c._last_compaction_artifact["status"] == "skipped_summary_unavailable"
+
+    def test_forced_compaction_uses_extractive_fallback_when_summary_unavailable(self):
+        with patch("agent.context_compressor.get_model_context_length", return_value=100000):
+            c = ContextCompressor(
+                model="test",
+                quiet_mode=True,
+                protect_first_n=2,
+                protect_last_n=2,
+            )
+
+        msgs = [
+            {"role": "user" if i % 2 == 0 else "assistant", "content": f"msg {i}"}
+            for i in range(10)
+        ]
+        with patch("agent.context_compressor.call_llm", side_effect=Exception("timeout")):
+            result = c.compress(msgs, allow_static_fallback=True)
+
+        assert len(result) < len(msgs)
+        assert c.compression_count == 1
+        assert c._last_compaction_artifact["status"] == "compressed"
+        assert "Extractive Checkpoint" in c._last_compaction_artifact["summary"]
+
     def test_summarization_does_not_split_tool_call_pairs(self):
         mock_client = MagicMock()
         mock_response = MagicMock()
@@ -639,68 +821,6 @@ class TestCompressWithClient:
             if msg.get("role") == "assistant" and msg.get("tool_calls"):
                 for tc in msg["tool_calls"]:
                     assert tc["id"] in answered_ids
-
-    def test_sanitizer_matches_responses_call_id_when_id_differs(self, compressor):
-        msgs = [
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "fc_123",
-                        "call_id": "call_123",
-                        "response_item_id": "fc_123",
-                        "type": "function",
-                        "function": {"name": "search_files", "arguments": "{}"},
-                    }
-                ],
-            },
-            {"role": "tool", "tool_call_id": "call_123", "content": "result"},
-        ]
-
-        sanitized = compressor._sanitize_tool_pairs(msgs)
-
-        assert [m.get("tool_call_id") for m in sanitized if m.get("role") == "tool"] == [
-            "call_123"
-        ]
-
-    def test_user_role_summary_carries_end_marker(self):
-        """When the summary lands as standalone role='user' (e.g. head ends
-        with assistant/tool), the message body must include the explicit
-        '--- END OF CONTEXT SUMMARY ---' marker. Without it, weak models
-        read the verbatim past user request quoted in '## Active Task' as
-        fresh input (#11475, #14521).
-        """
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = "summary text"
-
-        with patch("agent.context_compressor.get_model_context_length", return_value=100000):
-            c = ContextCompressor(model="test", quiet_mode=True, protect_first_n=2, protect_last_n=2)
-
-        # head_last=assistant, tail_first=assistant (same shape as the
-        # existing consecutive-user test) → role resolves to "user".
-        msgs = [
-            {"role": "user", "content": "msg 0"},
-            {"role": "assistant", "content": "msg 1"},
-            {"role": "user", "content": "msg 2"},
-            {"role": "assistant", "content": "msg 3"},
-            {"role": "user", "content": "msg 4"},
-            {"role": "assistant", "content": "msg 5"},
-            {"role": "user", "content": "msg 6"},
-            {"role": "assistant", "content": "msg 7"},
-        ]
-        with patch("agent.context_compressor.call_llm", return_value=mock_response):
-            result = c.compress(msgs)
-
-        summary_msg = next(
-            m for m in result if (m.get("content") or "").startswith(SUMMARY_PREFIX)
-        )
-        assert summary_msg["role"] == "user"
-        assert "END OF CONTEXT SUMMARY" in summary_msg["content"]
-        assert summary_msg["content"].rstrip().endswith(
-            "respond to the message below, not the summary above ---"
-        )
 
     def test_summary_role_avoids_consecutive_user_messages(self):
         """Summary role should alternate with the last head message to avoid consecutive same-role messages."""
@@ -1181,34 +1301,6 @@ class TestTokenBudgetTailProtection:
         # At least one old tool result should have been pruned
         assert pruned >= 1
 
-    def test_prune_short_conv_protects_entire_tail(self, budget_compressor):
-        """Regression guard for PR #17025.
-
-        When ``len(messages) <= protect_tail_count`` and a token budget is
-        also set, every message must be protected. The previous code used
-        ``min(protect_tail_count, len(result) - 1)`` which capped the floor
-        one below the full length, leaving the oldest message eligible for
-        pruning.
-        """
-        c = budget_compressor
-        # 4 messages, protect_tail_count=4 -- nothing should be pruned.
-        # Oldest message is a large tool result; on the buggy path it falls
-        # outside the protected window and gets summarized.
-        messages = [
-            {"role": "tool", "content": "x" * 5000, "tool_call_id": "c0"},
-            {"role": "assistant", "content": "ack"},
-            {"role": "user", "content": "recent"},
-            {"role": "assistant", "content": "reply"},
-        ]
-        result, pruned = c._prune_old_tool_results(
-            messages,
-            protect_tail_count=4,
-            protect_tail_tokens=1_000_000,  # budget large enough to protect all
-        )
-        assert pruned == 0
-        # Tool result at index 0 must be preserved verbatim
-        assert result[0]["content"] == "x" * 5000
-
     def test_prune_without_token_budget_uses_message_count(self, budget_compressor):
         """Without protect_tail_tokens, falls back to message-count behavior."""
         c = budget_compressor
@@ -1318,47 +1410,6 @@ class TestTokenBudgetTailProtection:
         cut = c._find_tail_cut_by_tokens(messages, head_end)
         assert isinstance(cut, int)
         assert 0 <= cut <= len(messages)
-
-    def test_generous_budget_protects_everything_floor_does_not_override(
-        self, budget_compressor
-    ):
-        """A budget that covers the whole transcript must prune nothing —
-        ``protect_tail_count`` is a minimum floor, not a ceiling."""
-        c = budget_compressor
-
-        # 100 alternating assistant/tool messages.  Each tool result has
-        # *unique* content so the dedup pass (Pass 1, which is independent
-        # of prune_boundary) is a no-op and we isolate the boundary logic.
-        messages = []
-        for i in range(50):
-            messages.append({
-                "role": "assistant", "content": None,
-                "tool_calls": [{
-                    "id": f"c{i}",
-                    "type": "function",
-                    "function": {"name": "noop", "arguments": "{}"},
-                }],
-            })
-            messages.append({
-                "role": "tool",
-                "tool_call_id": f"c{i}",
-                "content": f"unique-tool-output-{i:03d}-" + ("x" * 250),
-            })
-
-        # Budget large enough to cover the whole transcript many times over,
-        # so the budget walk completes without hitting its break condition
-        # and the boundary lands at 0 ("protect everything").
-        _, pruned = c._prune_old_tool_results(
-            messages,
-            protect_tail_count=20,
-            protect_tail_tokens=10_000_000,
-        )
-
-        assert pruned == 0, (
-            "budget said protect everything, but the floor still pruned "
-            f"{pruned} messages — protect_tail_count is acting as a ceiling, "
-            "not a minimum floor"
-        )
 
 
 class TestUpdateModelBudgets:

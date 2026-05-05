@@ -1,14 +1,14 @@
 ---
-title: "Google Workspace — Gmail, Calendar, Drive, Docs, Sheets via gws CLI or Python"
+title: "Google Workspace — Gmail, Calendar, Drive, Contacts, Sheets, and Docs integration for Hermes"
 sidebar_label: "Google Workspace"
-description: "Gmail, Calendar, Drive, Docs, Sheets via gws CLI or Python"
+description: "Gmail, Calendar, Drive, Contacts, Sheets, and Docs integration for Hermes"
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
 # Google Workspace
 
-Gmail, Calendar, Drive, Docs, Sheets via gws CLI or Python.
+Gmail, Calendar, Drive, Contacts, Sheets, and Docs integration for Hermes. Uses Hermes-managed OAuth2 setup, prefers the Google Workspace CLI (`gws`) when available for broader API coverage, and falls back to the Python client libraries otherwise.
 
 ## Skill metadata
 

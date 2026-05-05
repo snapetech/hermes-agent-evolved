@@ -33,6 +33,27 @@ def env_var_enabled(name: str, default: str = "") -> bool:
     return is_truthy_value(os.getenv(name, default), default=False)
 
 
+def base_url_hostname(base_url: str) -> str:
+    """Return the normalized hostname from a base URL or host-like string."""
+    raw = (base_url or "").strip()
+    if not raw:
+        return ""
+    parsed = urlparse(raw if "://" in raw else f"//{raw}")
+    return (parsed.hostname or "").lower().rstrip(".")
+
+
+def base_url_host_matches(base_url: str, domain: str) -> bool:
+    """Safely match a base URL against a domain or its subdomains.
+
+    This is the hostname-safe counterpart to ``domain in base_url``. It accepts
+    exact host matches and real subdomains while rejecting host suffixes and
+    path segments such as ``https://proxy.example/api.openai.com/v1``.
+    """
+    host = base_url_hostname(base_url)
+    normalized_domain = (domain or "").strip().lower().rstrip(".")
+    return bool(host and normalized_domain and (host == normalized_domain or host.endswith(f".{normalized_domain}")))
+
+
 def _preserve_file_mode(path: Path) -> "int | None":
     """Capture the permission bits of *path* if it exists, else ``None``."""
     try:

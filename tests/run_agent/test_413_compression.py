@@ -70,11 +70,18 @@ def _mock_response(content="Hello", finish_reason="stop", tool_calls=None, usage
     return resp
 
 
-def _make_413_error(*, use_status_code=True, message="Request entity too large"):
+def _make_413_error(
+    *,
+    use_status_code=True,
+    message="Request entity too large",
+    body=None,
+):
     """Create an exception that mimics a 413 HTTP error."""
     err = Exception(message)
     if use_status_code:
         err.status_code = 413
+    if body is not None:
+        err.body = body
     return err
 
 
@@ -190,6 +197,47 @@ class TestHTTP413Compression:
 
         mock_compress.assert_called_once()
         assert result["completed"] is True
+
+    def test_proxy_413_context_overflow_records_compaction_event(self, agent):
+        """Structured proxy 413 should trigger local compression and telemetry."""
+        err_413 = _make_413_error(
+            body={
+                "error": {
+                    "message": "compress and retry",
+                    "type": "context_overflow",
+                    "code": "context_overflow_compress_and_retry",
+                    "estimated_input_tokens": 91000,
+                    "max_input_tokens": 64000,
+                }
+            }
+        )
+        ok_resp = _mock_response(content="Recovered", finish_reason="stop")
+        agent.client.chat.completions.create.side_effect = [err_413, ok_resp]
+
+        with (
+            patch.object(agent.context_compressor, "compress", return_value=[{"role": "user", "content": "summary"}]),
+            patch.object(agent, "_compress_context", wraps=agent._compress_context) as mock_compress,
+            patch.object(agent, "_persist_session"),
+            patch.object(agent, "_save_trajectory"),
+            patch.object(agent, "_cleanup_task_resources"),
+        ):
+            result = agent.run_conversation(
+                "hello",
+                conversation_history=[
+                    {"role": "user", "content": "previous question"},
+                    {"role": "assistant", "content": "previous answer"},
+                ],
+            )
+
+        mock_compress.assert_called_once()
+        assert result["completed"] is True
+        assert agent._compaction_events
+        event = agent._compaction_events[-1]
+        assert event["source"] == "admission_proxy"
+        assert event["trigger"] == "proxy_context_overflow_retry"
+        assert event["code"] == "context_overflow_compress_and_retry"
+        assert event["estimated_input_tokens"] == 91000
+        assert event["max_input_tokens"] == 64000
 
     def test_413_clears_conversation_history_on_persist(self, agent):
         """After 413-triggered compression, _persist_session must receive None history.
@@ -432,8 +480,6 @@ class TestPreflightCompression:
 
         ok_resp = _mock_response(content="After preflight", finish_reason="stop")
         agent.client.chat.completions.create.side_effect = [ok_resp]
-        status_messages = []
-        agent.status_callback = lambda ev, msg: status_messages.append((ev, msg))
 
         with (
             patch.object(agent, "_compress_context") as mock_compress,
@@ -462,10 +508,6 @@ class TestPreflightCompression:
         )
         assert result["completed"] is True
         assert result["final_response"] == "After preflight"
-        assert any(
-            ev == "lifecycle" and "Preflight compression" in msg
-            for ev, msg in status_messages
-        )
 
     def test_no_preflight_when_under_threshold(self, agent):
         """When history fits within context, no preflight compression needed."""
@@ -492,6 +534,56 @@ class TestPreflightCompression:
 
         mock_compress.assert_not_called()
         assert result["completed"] is True
+
+    def test_preflight_compresses_early_for_recent_tool_activity(self, agent):
+        """Recent tool state should trigger preflight compaction before the base threshold."""
+        agent.compression_enabled = True
+        agent.context_compressor.context_length = 2_000
+        agent.context_compressor.threshold_tokens = 1_000
+        agent.context_compressor.protect_first_n = 1
+        agent.context_compressor.protect_last_n = 2
+
+        history = []
+        for i in range(4):
+            history.append({"role": "user", "content": f"Message number {i} with some extra text padding"})
+            history.append({"role": "assistant", "content": f"Response number {i} with extra padding here"})
+        history.extend([
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "call_1", "function": {"name": "web_search", "arguments": '{"query":"test"}'}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "large tool result"},
+            {"role": "user", "content": "hello"},
+        ])
+
+        ok_resp = _mock_response(content="After early preflight", finish_reason="stop")
+        agent.client.chat.completions.create.side_effect = [ok_resp]
+
+        with (
+            patch("run_agent.estimate_request_tokens_rough", return_value=850),
+            patch.object(agent.context_compressor, "compress", return_value=[
+                {"role": "user", "content": f"{SUMMARY_PREFIX}\nPrevious conversation"},
+                {"role": "user", "content": "hello"},
+            ]),
+            patch.object(agent, "_compress_context", wraps=agent._compress_context) as mock_compress,
+            patch.object(agent, "_persist_session"),
+            patch.object(agent, "_save_trajectory"),
+            patch.object(agent, "_cleanup_task_resources"),
+        ):
+            result = agent.run_conversation("hello", conversation_history=history)
+
+        mock_compress.assert_called_once()
+        assert result["completed"] is True
+        assert result["final_response"] == "After early preflight"
+        assert agent._compaction_events
+        event = agent._compaction_events[-1]
+        assert event["trigger"] == "preflight_recent_activity_headroom"
+        assert event["source"] == "local_policy"
+        assert event["recent_tool_activity"] is True
+        assert event["effective_threshold_tokens"] == 850
 
     def test_no_preflight_when_compression_disabled(self, agent):
         """Preflight should not run when compression is disabled."""

@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Palette, Check } from "lucide-react";
-import { Button } from "@nous-research/ui/ui/components/button";
-import { ListItem } from "@nous-research/ui/ui/components/list-item";
-import { Typography } from "@/components/NouiTypography";
+import { Button, ListItem, Typography } from "@nous-research/ui";
 import { BUILTIN_THEMES, useTheme } from "@/themes";
-import type { DashboardTheme } from "@/themes";
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 
@@ -12,8 +9,8 @@ import { cn } from "@/lib/utils";
  * Compact theme picker mounted next to the language switcher in the header.
  * Each dropdown row shows a 3-stop swatch (background / midground / warm
  * glow) so users can preview the palette before committing. User-defined
- * themes from `~/.hermes/dashboard-themes/*.yaml` use their API-provided
- * definitions so they show real palette swatches just like built-ins.
+ * themes from `~/.hermes/dashboard-themes/*.yaml` that aren't in
+ * `BUILTIN_THEMES` render without swatches and apply the default palette.
  *
  * When placed at the bottom of a container (e.g. the sidebar rail), pass
  * `dropUp` so the menu opens above the trigger instead of clipping below
@@ -96,7 +93,7 @@ export function ThemeSwitcher({ dropUp = false }: ThemeSwitcherProps) {
 
           {availableThemes.map((th) => {
             const isActive = th.name === themeName;
-            const paletteTheme = BUILTIN_THEMES[th.name] ?? th.definition;
+            const preset = BUILTIN_THEMES[th.name];
 
             return (
               <ListItem
@@ -110,8 +107,8 @@ export function ThemeSwitcher({ dropUp = false }: ThemeSwitcherProps) {
                 }}
                 className="gap-3"
               >
-                {paletteTheme ? (
-                  <ThemeSwatch theme={paletteTheme} />
+                {preset ? (
+                  <ThemeSwatch theme={preset.name} />
                 ) : (
                   <PlaceholderSwatch />
                 )}
@@ -145,8 +142,10 @@ export function ThemeSwitcher({ dropUp = false }: ThemeSwitcherProps) {
   );
 }
 
-function ThemeSwatch({ theme }: { theme: DashboardTheme }) {
-  const { background, midground, warmGlow } = theme.palette;
+function ThemeSwatch({ theme }: { theme: string }) {
+  const preset = BUILTIN_THEMES[theme];
+  if (!preset) return <PlaceholderSwatch />;
+  const { background, midground, warmGlow } = preset.palette;
   return (
     <div
       aria-hidden

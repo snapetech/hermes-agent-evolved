@@ -1,14 +1,14 @@
 ---
-title: "Github Pr Workflow — GitHub PR lifecycle: branch, commit, open, CI, merge"
+title: "Github Pr Workflow"
 sidebar_label: "Github Pr Workflow"
-description: "GitHub PR lifecycle: branch, commit, open, CI, merge"
+description: "Full pull request lifecycle — create branches, commit changes, open PRs, monitor CI status, auto-fix failures, and merge"
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
 # Github Pr Workflow
 
-GitHub PR lifecycle: branch, commit, open, CI, merge.
+Full pull request lifecycle — create branches, commit changes, open PRs, monitor CI status, auto-fix failures, and merge. Works with gh CLI or falls back to git + GitHub REST API via curl.
 
 ## Skill metadata
 

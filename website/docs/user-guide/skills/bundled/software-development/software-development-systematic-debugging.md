@@ -1,14 +1,14 @@
 ---
-title: "Systematic Debugging — 4-phase root cause debugging: understand bugs before fixing"
+title: "Systematic Debugging — Use when encountering any bug, test failure, or unexpected behavior"
 sidebar_label: "Systematic Debugging"
-description: "4-phase root cause debugging: understand bugs before fixing"
+description: "Use when encountering any bug, test failure, or unexpected behavior"
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
 # Systematic Debugging
 
-4-phase root cause debugging: understand bugs before fixing.
+Use when encountering any bug, test failure, or unexpected behavior. 4-phase root cause investigation — NO fixes without understanding the problem first.
 
 ## Skill metadata
 

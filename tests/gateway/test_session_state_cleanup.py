@@ -30,6 +30,7 @@ def _make_runner():
     runner._running_agents = {}
     runner._running_agents_ts = {}
     runner._busy_ack_ts = {}
+    runner._session_run_generation = {}
     return runner
 
 
@@ -111,6 +112,32 @@ class TestReleaseRunningAgentStateUnit:
         assert runner._running_agents == {}
         assert runner._running_agents_ts == {}
         assert runner._busy_ack_ts == {}
+
+    def test_generation_guard_blocks_stale_release(self):
+        runner = _make_runner()
+        runner._running_agents["k"] = MagicMock()
+        runner._running_agents_ts["k"] = 123.0
+        runner._busy_ack_ts["k"] = 456.0
+        runner._session_run_generation["k"] = 2
+
+        released = runner._release_running_agent_state("k", run_generation=1)
+
+        assert released is False
+        assert "k" in runner._running_agents
+        assert "k" in runner._running_agents_ts
+        assert "k" in runner._busy_ack_ts
+
+    def test_generation_guard_allows_current_release(self):
+        runner = _make_runner()
+        runner._running_agents["k"] = MagicMock()
+        runner._running_agents_ts["k"] = 123.0
+        runner._busy_ack_ts["k"] = 456.0
+        runner._session_run_generation["k"] = 2
+
+        released = runner._release_running_agent_state("k", run_generation=2)
+
+        assert released is True
+        assert "k" not in runner._running_agents
 
 
 class TestNoMoreBareDeleteSites:

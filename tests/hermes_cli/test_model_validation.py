@@ -149,6 +149,13 @@ class TestCuratedModelsForProvider:
     def test_unknown_provider_returns_empty(self):
         assert curated_models_for_provider("totally-unknown") == []
 
+    def test_kilocode_prefers_kimi_models_in_static_fallback(self):
+        models = curated_models_for_provider("kilocode")
+        assert models[:2] == [
+            ("kilo-auto/free", ""),
+            ("moonshotai/kimi-k2.6", ""),
+        ]
+
 
 # -- normalize_provider ------------------------------------------------------
 

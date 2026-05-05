@@ -30,11 +30,11 @@ class TestKnownPrefixes:
         assert "abcdefghijklmnop" not in result
 
     def test_github_pat_classic(self):
-        result = redact_sensitive_text("token: ghp_abc123def456ghi789jkl")
+        result = redact_sensitive_text("token: GITHUB_TOKEN_PLACEHOLDER")
         assert "abc123def456" not in result
 
     def test_github_pat_fine_grained(self):
-        result = redact_sensitive_text("github_pat_abc123def456ghi789jklmno")
+        result = redact_sensitive_text("GITHUB_TOKEN_PLACEHOLDER")
         assert "abc123def456" not in result
 
     def test_slack_token(self):
@@ -232,7 +232,7 @@ class TestSecretCapturePayloadRedaction:
         assert "sk-test-secret-1234567890" not in result
 
     def test_raw_secret_field_redacted(self):
-        text = '{"raw_secret": "ghp_abc123def456ghi789jkl"}'
+        text = '{"raw_secret": "GITHUB_TOKEN_PLACEHOLDER"}'
         result = redact_sensitive_text(text)
         assert "abc123def456" not in result
 

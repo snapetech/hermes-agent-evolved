@@ -413,13 +413,21 @@ class TestResolveApiKeyProviderCredentials:
         assert creds["base_url"] == "https://api.z.ai/api/paas/v4"
         assert creds["source"] == "GLM_API_KEY"
 
-    def test_resolve_copilot_with_github_token(self, monkeypatch):
-        monkeypatch.setenv("GITHUB_TOKEN", "gh-env-secret")
+    def test_resolve_copilot_with_github_oauth_token(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_TOKEN", "gho_env_secret")
         creds = resolve_api_key_provider_credentials("copilot")
         assert creds["provider"] == "copilot"
-        assert creds["api_key"] == "gh-env-secret"
+        assert creds["api_key"] == "gho_env_secret"
         assert creds["base_url"] == "https://api.githubcopilot.com"
         assert creds["source"] == "GITHUB_TOKEN"
+
+    def test_resolve_copilot_skips_github_pat(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_TOKEN", "github_pat_env_secret")
+        monkeypatch.setattr("hermes_cli.copilot_auth._try_gh_cli_token", lambda: None)
+        creds = resolve_api_key_provider_credentials("copilot")
+        assert creds["provider"] == "copilot"
+        assert creds["api_key"] == ""
+        assert creds["source"] == "default"
 
     def test_resolve_copilot_with_gh_cli_fallback(self, monkeypatch):
         monkeypatch.setattr("hermes_cli.copilot_auth._try_gh_cli_token", lambda: "gho_cli_secret")
@@ -1097,63 +1105,3 @@ class TestHuggingFaceModels:
         from hermes_cli.models import _PROVIDER_LABELS
         assert "huggingface" in _PROVIDER_LABELS
         assert _PROVIDER_LABELS["huggingface"] == "Hugging Face"
-
-
-# =============================================================================
-# MiniMax OAuth provider tests (added by feat/minimax-oauth-provider)
-# =============================================================================
-
-class TestMinimaxOAuthProvider:
-    """Tests for the minimax-oauth OAuth provider."""
-
-    def test_minimax_oauth_in_provider_registry(self):
-        assert "minimax-oauth" in PROVIDER_REGISTRY
-        pconfig = PROVIDER_REGISTRY["minimax-oauth"]
-        assert pconfig.auth_type == "oauth_minimax"
-        assert pconfig.id == "minimax-oauth"
-
-    def test_minimax_oauth_has_correct_endpoints(self):
-        from hermes_cli.auth import (
-            MINIMAX_OAUTH_GLOBAL_BASE,
-            MINIMAX_OAUTH_GLOBAL_INFERENCE,
-            MINIMAX_OAUTH_CN_BASE,
-            MINIMAX_OAUTH_CN_INFERENCE,
-        )
-        pconfig = PROVIDER_REGISTRY["minimax-oauth"]
-        assert pconfig.portal_base_url == MINIMAX_OAUTH_GLOBAL_BASE
-        assert pconfig.inference_base_url == MINIMAX_OAUTH_GLOBAL_INFERENCE
-        assert pconfig.extra["cn_portal_base_url"] == MINIMAX_OAUTH_CN_BASE
-        assert pconfig.extra["cn_inference_base_url"] == MINIMAX_OAUTH_CN_INFERENCE
-
-    def test_minimax_oauth_alias_resolves_portal(self):
-        result = resolve_provider("minimax-portal")
-        assert result == "minimax-oauth"
-
-    def test_minimax_oauth_alias_resolves_global(self):
-        result = resolve_provider("minimax-global")
-        assert result == "minimax-oauth"
-
-    def test_minimax_oauth_alias_resolves_underscore(self):
-        result = resolve_provider("minimax_oauth")
-        assert result == "minimax-oauth"
-
-    def test_minimax_oauth_listed_in_canonical_providers(self):
-        from hermes_cli.models import CANONICAL_PROVIDERS
-        slugs = [p.slug for p in CANONICAL_PROVIDERS]
-        assert "minimax-oauth" in slugs
-
-    def test_minimax_oauth_models_alias_in_models_py(self):
-        from hermes_cli.models import _PROVIDER_ALIASES
-        assert _PROVIDER_ALIASES.get("minimax-portal") == "minimax-oauth"
-        assert _PROVIDER_ALIASES.get("minimax-global") == "minimax-oauth"
-        assert _PROVIDER_ALIASES.get("minimax_oauth") == "minimax-oauth"
-
-    def test_minimax_oauth_has_models(self):
-        from hermes_cli.models import _PROVIDER_MODELS
-        models = _PROVIDER_MODELS.get("minimax-oauth", [])
-        assert len(models) >= 1
-
-    def test_minimax_oauth_aux_model_registered(self):
-        from agent.auxiliary_client import _API_KEY_PROVIDER_AUX_MODELS
-        assert "minimax-oauth" in _API_KEY_PROVIDER_AUX_MODELS
-        assert _API_KEY_PROVIDER_AUX_MODELS["minimax-oauth"]  # non-empty

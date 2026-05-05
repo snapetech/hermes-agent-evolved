@@ -1,14 +1,14 @@
 ---
-title: "Unsloth — Unsloth: 2-5x faster LoRA/QLoRA fine-tuning, less VRAM"
+title: "Unsloth"
 sidebar_label: "Unsloth"
-description: "Unsloth: 2-5x faster LoRA/QLoRA fine-tuning, less VRAM"
+description: "Expert guidance for fast fine-tuning with Unsloth - 2-5x faster training, 50-80% less memory, LoRA/QLoRA optimization"
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
 # Unsloth
 
-Unsloth: 2-5x faster LoRA/QLoRA fine-tuning, less VRAM.
+Expert guidance for fast fine-tuning with Unsloth - 2-5x faster training, 50-80% less memory, LoRA/QLoRA optimization
 
 ## Skill metadata
 

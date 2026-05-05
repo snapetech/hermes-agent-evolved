@@ -16,22 +16,15 @@ const RELEVANT_ENV = [
   'HERMES_TUI_THEME',
   'HERMES_TUI_BACKGROUND',
   'COLORFGBG',
-  'COLORTERM',
-  'TERM_PROGRAM'
+  'TERM_PROGRAM',
 ] as const
 
-async function importThemeWithEnv(env: Partial<Record<(typeof RELEVANT_ENV)[number], string>> = {}) {
-  for (const key of RELEVANT_ENV) {
-    vi.stubEnv(key, env[key] ?? '')
-  }
-
-  vi.resetModules()
-
-  return import('../theme.js')
-}
-
 async function importThemeWithCleanEnv() {
-  return importThemeWithEnv()
+  for (const key of RELEVANT_ENV) {
+    vi.stubEnv(key, '')
+  }
+  vi.resetModules()
+  return import('../theme.js')
 }
 
 afterEach(() => {
@@ -87,12 +80,6 @@ describe('detectLightMode', () => {
     const { detectLightMode } = await importThemeWithCleanEnv()
 
     expect(detectLightMode({})).toBe(false)
-  })
-
-  it('defaults Apple Terminal to light when no stronger signal is present', async () => {
-    const { detectLightMode } = await importThemeWithCleanEnv()
-
-    expect(detectLightMode({ TERM_PROGRAM: 'Apple_Terminal' })).toBe(true)
   })
 
   it('honors HERMES_TUI_LIGHT on/off', async () => {
@@ -170,15 +157,17 @@ describe('detectLightMode', () => {
 
   it('treats COLORFGBG as authoritative when present so it dominates the TERM_PROGRAM allow-list', async () => {
     const { detectLightMode } = await importThemeWithCleanEnv()
-    // Injecting the allow-list keeps this precedence rule explicit even if
-    // production defaults change.
+    // Inject a light-default allow-list so the precedence test is
+    // meaningful even though the production allow-list is empty.
     const allowList = new Set(['Apple_Terminal'])
 
     // Sanity: the allow-list alone WOULD turn this terminal light.
     expect(detectLightMode({ TERM_PROGRAM: 'Apple_Terminal' }, allowList)).toBe(true)
 
     // Dark COLORFGBG must beat the allow-list.
-    expect(detectLightMode({ COLORFGBG: '15;0', TERM_PROGRAM: 'Apple_Terminal' }, allowList)).toBe(false)
+    expect(
+      detectLightMode({ COLORFGBG: '15;0', TERM_PROGRAM: 'Apple_Terminal' }, allowList),
+    ).toBe(false)
   })
 })
 
@@ -230,40 +219,6 @@ describe('fromSkin', () => {
 
     expect(fromSkin({}, {}).color).toEqual(DEFAULT_THEME.color)
     expect(fromSkin({}, {}).brand.icon).toBe(DEFAULT_THEME.brand.icon)
-  })
-
-  it('normalizes non-banner foregrounds on light Apple Terminal', async () => {
-    const { fromSkin } = await importThemeWithEnv({ TERM_PROGRAM: 'Apple_Terminal' })
-
-    const theme = fromSkin({
-      banner_accent: '#FFBF00',
-      banner_border: '#CD7F32',
-      banner_dim: '#B8860B',
-      banner_text: '#FFF8DC',
-      banner_title: '#FFD700',
-      prompt: '#FFF8DC'
-    }, {})
-
-    expect(theme.color.primary).toBe('#FFD700')
-    expect(theme.color.accent).toBe('#FFBF00')
-    expect(theme.color.border).toBe('#CD7F32')
-    expect(theme.color.muted).toBe('ansi256(245)')
-    expect(theme.color.text).toBe('ansi256(136)')
-    expect(theme.color.prompt).toBe('ansi256(136)')
-  })
-
-  it('does not normalize light Apple Terminal when truecolor is advertised', async () => {
-    const { fromSkin } = await importThemeWithEnv({ COLORTERM: 'truecolor', TERM_PROGRAM: 'Apple_Terminal' })
-    const theme = fromSkin({ banner_text: '#FFF8DC' }, {})
-
-    expect(theme.color.text).toBe('#FFF8DC')
-  })
-
-  it('normalizes Apple Terminal names before matching', async () => {
-    const { fromSkin } = await importThemeWithEnv({ TERM_PROGRAM: ' Apple_Terminal ' })
-    const theme = fromSkin({ banner_text: '#FFF8DC' }, {})
-
-    expect(theme.color.text).toBe('ansi256(136)')
   })
 
   it('passes banner logo/hero', async () => {

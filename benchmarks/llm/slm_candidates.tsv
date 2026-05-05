@@ -1,0 +1,9 @@
+priority	alias	repo	include	local_file	first_quant	params_or_active	estimated_file_size	role	source
+1	lfm25-12b-instruct:q4km	LiquidAI/LFM2.5-1.2B-Instruct-GGUF	*Q4_K_M.gguf	LFM2.5-1.2B-Instruct-Q4_K_M.gguf	Q4_K_M	1.2B	731 MB	default SLM utility, extraction, routing	https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF
+2	lfm25-12b-thinking:q4km	LiquidAI/LFM2.5-1.2B-Thinking-GGUF	*Q4_K_M.gguf	LFM2.5-1.2B-Thinking-Q4_K_M.gguf	Q4_K_M	1.2B	731 MB	reasoning-heavy SLM utility, mutation guard	https://huggingface.co/LiquidAI/LFM2.5-1.2B-Thinking-GGUF
+3	qwen3-06b:q8	Qwen/Qwen3-0.6B-GGUF	*Q8_0.gguf	Qwen3-0.6B-Q8_0.gguf	Q8_0	0.6B	639 MB	tiny Qwen control, CPU/GPU multiplex	https://huggingface.co/Qwen/Qwen3-0.6B-GGUF
+4	qwen3-17b:q8	Qwen/Qwen3-1.7B-GGUF	*Q8_0.gguf	Qwen3-1.7B-Q8_0.gguf	Q8_0	1.7B	empirical	tiny agent/tool-control baseline	https://huggingface.co/Qwen/Qwen3-1.7B-GGUF
+5	lfm25-12b-jp:q4km	LiquidAI/LFM2.5-1.2B-JP-GGUF	*Q4_K_M.gguf	LFM2.5-1.2B-JP-Q4_K_M.gguf	Q4_K_M	1.2B	empirical	Japanese-localized SLM lane	https://huggingface.co/LiquidAI/LFM2.5-1.2B-JP-GGUF
+6	gemma3-1b-it:q4km	ggml-org/gemma-3-1b-it-GGUF	*Q4_K_M.gguf	gemma-3-1b-it-Q4_K_M.gguf	Q4_K_M	1.0B	empirical	Gemma 1B control	https://huggingface.co/ggml-org/gemma-3-1b-it-GGUF
+7	phi4-mini-instruct:q4km	lmstudio-community/Phi-4-mini-instruct-GGUF	*Q4_K_M.gguf	Phi-4-mini-instruct-Q4_K_M.gguf	Q4_K_M	3.8B	empirical	upper SLM / lower small-LLM control	https://huggingface.co/lmstudio-community/Phi-4-mini-instruct-GGUF
+8	smollm3-3b:q6	ggml-org/SmolLM3-3B-GGUF	*Q6_K.gguf	SmolLM3-3B-Q6_K.gguf	Q6_K	3.0B	empirical	open 3B long-context control	https://huggingface.co/ggml-org/SmolLM3-3B-GGUF

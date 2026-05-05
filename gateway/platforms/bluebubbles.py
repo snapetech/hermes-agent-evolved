@@ -162,9 +162,7 @@ class BlueBubblesAdapter(BasePlatformAdapter):
             return False
         from aiohttp import web
 
-        # Tighter keepalive so idle CLOSE_WAIT drains promptly (#18451).
-        from gateway.platforms._http_client_limits import platform_httpx_limits
-        self.client = httpx.AsyncClient(timeout=30.0, limits=platform_httpx_limits())
+        self.client = httpx.AsyncClient(timeout=30.0)
         try:
             await self._api_get("/api/v1/ping")
             info = await self._api_get("/api/v1/server/info")

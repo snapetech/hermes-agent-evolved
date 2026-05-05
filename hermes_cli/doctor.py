@@ -8,8 +8,15 @@ import os
 import sys
 import subprocess
 import shutil
-import importlib.util
 from pathlib import Path
+
+def _safe_which(command: str) -> str | None:
+    """shutil.which can break when tests monkeypatch sys.platform to win32."""
+    try:
+        return shutil.which(command)
+    except AttributeError:
+        return None
+
 
 from hermes_cli.config import get_project_root, get_hermes_home, get_env_path
 from hermes_constants import display_hermes_home
@@ -31,7 +38,6 @@ load_dotenv(PROJECT_ROOT / ".env", override=False, encoding="utf-8")
 
 from hermes_cli.colors import Colors, color
 from hermes_cli.models import _HERMES_USER_AGENT
-from hermes_cli.vercel_auth import describe_vercel_auth
 from hermes_constants import OPENROUTER_MODELS_URL
 from utils import base_url_host_matches
 
@@ -76,14 +82,6 @@ def _system_package_install_cmd(pkg: str) -> str:
     if sys.platform == "darwin":
         return f"brew install {pkg}"
     return f"sudo apt install {pkg}"
-
-
-def _safe_which(cmd: str) -> str | None:
-    """shutil.which wrapper resilient to platform monkeypatching in tests."""
-    try:
-        return shutil.which(cmd)
-    except Exception:
-        return None
 
 
 def _termux_browser_setup_steps(node_installed: bool) -> list[str]:
@@ -263,11 +261,8 @@ def run_doctor(args):
     if env_path.exists():
         check_ok(f"{_DHH}/.env file exists")
         
-        # Check for common issues. Pin encoding to UTF-8 because .env files are
-        # written as UTF-8 everywhere in the codebase, while Path.read_text()
-        # defaults to the system locale — which crashes on non-UTF-8 Windows
-        # locales (e.g. GBK) as soon as the file contains any non-ASCII byte.
-        content = env_path.read_text(encoding="utf-8")
+        # Check for common issues
+        content = env_path.read_text()
         if _has_provider_env_config(content):
             check_ok("API key or custom endpoint configured")
         else:
@@ -550,7 +545,6 @@ def run_doctor(args):
             get_nous_auth_status,
             get_codex_auth_status,
             get_gemini_oauth_auth_status,
-            get_minimax_oauth_auth_status,
         )
 
         nous_status = get_nous_auth_status()
@@ -580,13 +574,6 @@ def run_doctor(args):
             check_ok("Google Gemini OAuth", f"(logged in{suffix})")
         else:
             check_warn("Google Gemini OAuth", "(not logged in)")
-
-        minimax_status = get_minimax_oauth_auth_status()
-        if minimax_status.get("logged_in"):
-            region = minimax_status.get("region", "global")
-            check_ok("MiniMax OAuth", f"(logged in, region={region})")
-        else:
-            check_warn("MiniMax OAuth", "(not logged in)")
     except Exception as e:
         check_warn("Auth provider status", f"(could not check: {e})")
 
@@ -884,50 +871,6 @@ def run_doctor(args):
             check_fail("daytona SDK not installed", "(pip install daytona)")
             issues.append("Install daytona SDK: pip install daytona")
 
-    # Vercel Sandbox (if using vercel_sandbox backend)
-    if terminal_env == "vercel_sandbox":
-        runtime = os.getenv("TERMINAL_VERCEL_RUNTIME", "node24").strip() or "node24"
-        from tools.terminal_tool import _SUPPORTED_VERCEL_RUNTIMES
-        if runtime in _SUPPORTED_VERCEL_RUNTIMES:
-            check_ok("Vercel runtime", f"({runtime})")
-        else:
-            supported = ", ".join(_SUPPORTED_VERCEL_RUNTIMES)
-            check_fail("Vercel runtime unsupported", f"({runtime}; use {supported})")
-            issues.append(f"Set TERMINAL_VERCEL_RUNTIME to one of: {supported}")
-
-        disk = os.getenv("TERMINAL_CONTAINER_DISK", "51200").strip()
-        if disk in ("", "0", "51200"):
-            check_ok("Vercel disk setting", "(uses platform default)")
-        else:
-            check_fail("Vercel custom disk unsupported", "(reset terminal.container_disk to 51200)")
-            issues.append("Vercel Sandbox does not support custom container_disk; use the shared default 51200")
-
-        if importlib.util.find_spec("vercel") is not None:
-            check_ok("vercel SDK", "(installed)")
-        else:
-            check_fail("vercel SDK not installed", "(pip install 'hermes-agent[vercel]')")
-            issues.append("Install the Vercel optional dependency: pip install 'hermes-agent[vercel]'")
-
-        auth_status = describe_vercel_auth()
-        if auth_status.ok:
-            check_ok("Vercel auth", f"({auth_status.label})")
-        elif auth_status.label.startswith("partial"):
-            check_fail("Vercel auth incomplete", f"({auth_status.label})")
-            issues.append("Set VERCEL_TOKEN, VERCEL_PROJECT_ID, and VERCEL_TEAM_ID together")
-        else:
-            check_fail("Vercel auth not configured", f"({auth_status.label})")
-            issues.append(
-                "Configure Vercel Sandbox auth with VERCEL_TOKEN, VERCEL_PROJECT_ID, and VERCEL_TEAM_ID"
-            )
-        for line in auth_status.detail_lines:
-            check_info(f"Vercel auth {line}")
-
-        persistent = os.getenv("TERMINAL_CONTAINER_PERSISTENT", "true").lower() in ("1", "true", "yes", "on")
-        if persistent:
-            check_info("Vercel persistence: snapshot filesystem only; live processes do not survive sandbox recreation")
-        else:
-            check_info("Vercel persistence: ephemeral filesystem")
-
     # Node.js + agent-browser (for browser automation tools)
     if _safe_which("node"):
         check_ok("Node.js")
@@ -935,8 +878,6 @@ def run_doctor(args):
         agent_browser_path = PROJECT_ROOT / "node_modules" / "agent-browser"
         if agent_browser_path.exists():
             check_ok("agent-browser (Node.js)", "(browser automation)")
-        elif shutil.which("agent-browser"):
-            check_ok("agent-browser", "(browser automation)")
         else:
             if _is_termux():
                 check_info("agent-browser is not installed (expected in the tested Termux path)")
@@ -1036,16 +977,10 @@ def run_doctor(args):
         print("  Checking Anthropic API...", end="", flush=True)
         try:
             import httpx
-            from agent.anthropic_adapter import (
-                _is_oauth_token,
-                _COMMON_BETAS,
-                _OAUTH_ONLY_BETAS,
-                _CONTEXT_1M_BETA,
-            )
+            from agent.anthropic_adapter import _is_oauth_token, _COMMON_BETAS, _OAUTH_ONLY_BETAS
 
             headers = {"anthropic-version": "2023-06-01"}
-            is_oauth = _is_oauth_token(anthropic_key)
-            if is_oauth:
+            if _is_oauth_token(anthropic_key):
                 headers["Authorization"] = f"Bearer {anthropic_key}"
                 headers["anthropic-beta"] = ",".join(_COMMON_BETAS + _OAUTH_ONLY_BETAS)
             else:
@@ -1055,25 +990,6 @@ def run_doctor(args):
                 headers=headers,
                 timeout=10
             )
-            # Reactive recovery: OAuth subscriptions that don't include 1M
-            # context reject the request with 400 "long context beta is not
-            # yet available for this subscription". Retry once with that
-            # beta stripped so the doctor check doesn't falsely report the
-            # Anthropic API as unreachable for those users.
-            if (
-                is_oauth
-                and response.status_code == 400
-                and "long context beta" in response.text.lower()
-                and "not yet available" in response.text.lower()
-            ):
-                headers["anthropic-beta"] = ",".join(
-                    [b for b in _COMMON_BETAS if b != _CONTEXT_1M_BETA] + list(_OAUTH_ONLY_BETAS)
-                )
-                response = httpx.get(
-                    "https://api.anthropic.com/v1/models",
-                    headers=headers,
-                    timeout=10,
-                )
             if response.status_code == 200:
                 print(f"\r  {color('✓', Colors.GREEN)} Anthropic API                           ")
             elif response.status_code == 401:
@@ -1098,10 +1014,9 @@ def run_doctor(args):
         ("Hugging Face",     ("HF_TOKEN",),                                   "https://router.huggingface.co/v1/models", "HF_BASE_URL", True),
         ("NVIDIA NIM",       ("NVIDIA_API_KEY",),                             "https://integrate.api.nvidia.com/v1/models", "NVIDIA_BASE_URL", True),
         ("Alibaba/DashScope", ("DASHSCOPE_API_KEY",),                         "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models", "DASHSCOPE_BASE_URL", True),
-        # MiniMax global: /v1 endpoint supports /models.
+        # MiniMax: the /anthropic endpoint doesn't support /models, but the /v1 endpoint does.
         ("MiniMax",          ("MINIMAX_API_KEY",),                            "https://api.minimax.io/v1/models",    "MINIMAX_BASE_URL", True),
-        # MiniMax CN: /v1 endpoint does NOT support /models (returns 404).
-        ("MiniMax (China)",  ("MINIMAX_CN_API_KEY",),                         "https://api.minimaxi.com/v1/models",  "MINIMAX_CN_BASE_URL", False),
+        ("MiniMax (China)",  ("MINIMAX_CN_API_KEY",),                         "https://api.minimaxi.com/v1/models",  "MINIMAX_CN_BASE_URL", True),
         ("Vercel AI Gateway",       ("AI_GATEWAY_API_KEY",),                          "https://ai-gateway.vercel.sh/v1/models", "AI_GATEWAY_BASE_URL", True),
         ("Kilo Code",        ("KILOCODE_API_KEY",),                            "https://api.kilo.ai/api/gateway/models",  "KILOCODE_BASE_URL", True),
         ("OpenCode Zen",     ("OPENCODE_ZEN_API_KEY",),                        "https://opencode.ai/zen/v1/models",  "OPENCODE_ZEN_BASE_URL", True),
@@ -1264,23 +1179,9 @@ def run_doctor(args):
         check_warn("Skills Hub directory not initialized", "(run: hermes skills list)")
 
     from hermes_cli.config import get_env_value
-
-    def _gh_authenticated() -> bool:
-        """Check if gh CLI is authenticated via token file or device flow."""
-        try:
-            result = subprocess.run(
-                ["gh", "auth", "status", "--json", "authenticated"],
-                capture_output=True, timeout=10,
-            )
-            return result.returncode == 0
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            return False
-
     github_token = get_env_value("GITHUB_TOKEN") or get_env_value("GH_TOKEN")
     if github_token:
         check_ok("GitHub token configured (authenticated API access)")
-    elif _gh_authenticated():
-        check_ok("GitHub authenticated via gh CLI", "(full API access — no GITHUB_TOKEN needed)")
     else:
         check_warn("No GITHUB_TOKEN", f"(60 req/hr rate limit — set in {_DHH}/.env for better rates)")
 

@@ -1,14 +1,14 @@
 ---
-title: "Apple Reminders — Apple Reminders via remindctl: add, list, complete"
+title: "Apple Reminders — Manage Apple Reminders via remindctl CLI (list, add, complete, delete)"
 sidebar_label: "Apple Reminders"
-description: "Apple Reminders via remindctl: add, list, complete"
+description: "Manage Apple Reminders via remindctl CLI (list, add, complete, delete)"
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
 # Apple Reminders
 
-Apple Reminders via remindctl: add, list, complete.
+Manage Apple Reminders via remindctl CLI (list, add, complete, delete).
 
 ## Skill metadata
 

@@ -77,7 +77,6 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Set, Tuple
 
 from tools.registry import registry, tool_error
-from hermes_cli.config import cfg_get
 
 logger = logging.getLogger(__name__)
 
@@ -100,10 +99,8 @@ _PLATFORM_MAP = {
     "windows": "win32",
 }
 _ENV_VAR_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_EXCLUDED_SKILL_DIRS = frozenset((".git", ".github", ".hub", ".archive"))
-_REMOTE_ENV_BACKENDS = frozenset(
-    {"docker", "singularity", "modal", "ssh", "daytona", "vercel_sandbox"}
-)
+_EXCLUDED_SKILL_DIRS = frozenset((".git", ".github", ".hub"))
+_REMOTE_ENV_BACKENDS = frozenset({"docker", "singularity", "modal", "ssh", "daytona"})
 _secret_capture_callback = None
 
 
@@ -538,7 +535,7 @@ def _is_skill_disabled(name: str, platform: str = None) -> bool:
         skills_cfg = config.get("skills", {})
         resolved_platform = platform or os.getenv("HERMES_PLATFORM") or _get_session_platform()
         if resolved_platform:
-            platform_disabled = cfg_get(skills_cfg, "platform_disabled", resolved_platform)
+            platform_disabled = skills_cfg.get("platform_disabled", {}).get(resolved_platform)
             if platform_disabled is not None:
                 return name in platform_disabled
         return name in skills_cfg.get("disabled", [])
@@ -572,7 +569,13 @@ def _find_all_skills(*, skip_disabled: bool = False) -> List[Dict[str, Any]]:
     dirs_to_scan.extend(get_external_skills_dirs())
 
     for scan_dir in dirs_to_scan:
-        for skill_md in iter_skill_index_files(scan_dir, "SKILL.md"):
+        if isinstance(scan_dir, Path):
+            skill_files = iter_skill_index_files(scan_dir, "SKILL.md")
+        else:
+            # Some tests monkeypatch SKILLS_DIR with a path-like mock. Keep
+            # that seam working while production paths use the shared walker.
+            skill_files = scan_dir.rglob("SKILL.md")
+        for skill_md in skill_files:
             if any(part in _EXCLUDED_SKILL_DIRS for part in skill_md.parts):
                 continue
 
@@ -1483,37 +1486,13 @@ registry.register(
     check_fn=check_skills_requirements,
     emoji="📚",
 )
-def _skill_view_with_bump(args, **kw):
-    """Invoke skill_view, then bump view_count on success. Best-effort: a
-    telemetry failure never breaks the tool call."""
-    name = args.get("name", "")
-    result = skill_view(
-        name, file_path=args.get("file_path"), task_id=kw.get("task_id")
-    )
-    try:
-        parsed = json.loads(result)
-        if isinstance(parsed, dict) and parsed.get("success"):
-            # Use the resolved skill name from the payload when present —
-            # qualified forms ("plugin:skill") return with the canonical name.
-            resolved = parsed.get("name") or name
-            if resolved:
-                from tools.skill_usage import bump_use, bump_view
-                bump_view(str(resolved))
-                # A skill_view tool call is the agent actively loading the skill
-                # to act on it — that counts as use, not just a browse/view.
-                # Curator's stale timer keys off last_used_at (see agent/curator.py).
-                bump_use(str(resolved))
-    except Exception:
-        pass
-    return result
-
-
 registry.register(
     name="skill_view",
     toolset="skills",
     schema=SKILL_VIEW_SCHEMA,
-    handler=_skill_view_with_bump,
+    handler=lambda args, **kw: skill_view(
+        args.get("name", ""), file_path=args.get("file_path"), task_id=kw.get("task_id")
+    ),
     check_fn=check_skills_requirements,
     emoji="📚",
 )
-

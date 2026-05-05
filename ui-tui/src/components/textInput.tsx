@@ -4,15 +4,8 @@ import { type MutableRefObject, useEffect, useMemo, useRef, useState } from 'rea
 
 import { setInputSelection } from '../app/inputSelectionStore.js'
 import { readClipboardText, writeClipboardText } from '../lib/clipboard.js'
-import { cursorLayout, offsetFromPosition } from '../lib/inputMetrics.js'
-import {
-  DEFAULT_VOICE_RECORD_KEY,
-  isActionMod,
-  isMac,
-  isMacActionFallback,
-  isVoiceToggleKey,
-  type ParsedVoiceRecordKey
-} from '../lib/platform.js'
+import { cursorLayout } from '../lib/inputMetrics.js'
+import { isActionMod, isMac, isMacActionFallback } from '../lib/platform.js'
 
 type InkExt = typeof Ink & {
   stringWidth: (s: string) => number
@@ -177,7 +170,57 @@ export function lineNav(s: string, p: number, dir: -1 | 1): null | number {
   return snapPos(s, Math.min(nextBreak + 1 + col, lineEnd))
 }
 
-export { offsetFromPosition }
+export function offsetFromPosition(value: string, row: number, col: number, cols: number) {
+  if (!value.length) {
+    return 0
+  }
+
+  const targetRow = Math.max(0, Math.floor(row))
+  const targetCol = Math.max(0, Math.floor(col))
+  const w = Math.max(1, cols)
+
+  let line = 0
+  let column = 0
+  let lastOffset = 0
+
+  for (const { segment, index } of seg().segment(value)) {
+    lastOffset = index
+
+    if (segment === '\n') {
+      if (line === targetRow) {
+        return index
+      }
+
+      line++
+      column = 0
+
+      continue
+    }
+
+    const sw = Math.max(1, stringWidth(segment))
+
+    if (column + sw > w) {
+      if (line === targetRow) {
+        return index
+      }
+
+      line++
+      column = 0
+    }
+
+    if (line === targetRow && targetCol <= column + Math.max(0, sw - 1)) {
+      return index
+    }
+
+    column += sw
+  }
+
+  if (targetRow >= line) {
+    return value.length
+  }
+
+  return lastOffset
+}
 
 function renderWithCursor(value: string, cursor: number) {
   const pos = Math.max(0, Math.min(cursor, value.length))
@@ -246,7 +289,6 @@ export function TextInput({
   onSubmit,
   mask,
   mouseApiRef,
-  voiceRecordKey = DEFAULT_VOICE_RECORD_KEY,
   placeholder = '',
   focus = true
 }: TextInputProps) {
@@ -707,15 +749,6 @@ export function TextInput({
     (inp: string, k: Key, event: InputEvent) => {
       const eventRaw = event.keypress.raw
 
-      // Configured voice shortcut wins over composer-level defaults like
-      // paste/copy so users who bind voice to ctrl+v / alt+v / cmd+v
-      // actually get voice toggled instead of a paste (Copilot round-7
-      // follow-up on #19835). The pass-through predicate is a no-op for
-      // ordinary typing and plain paste when voice is unbound to 'v'.
-      if (shouldPassThroughToGlobalHandler(inp, k, voiceRecordKey)) {
-        return
-      }
-
       if (
         eventRaw === '\x1bv' ||
         eventRaw === '\x1bV' ||
@@ -758,6 +791,22 @@ export function TextInput({
           return
         }
 
+        return
+      }
+
+      // Ctrl chords claimed by useInputHandlers — pass through instead of
+      // letting them fall into readline-style nav or a literal char insert.
+      // Ctrl+B = voice toggle, Ctrl+X = delete queued message while editing.
+      if (
+        (k.ctrl && inp === 'c') ||
+        (k.ctrl && inp === 'b') ||
+        (k.ctrl && inp === 'x') ||
+        k.tab ||
+        (k.shift && k.tab) ||
+        k.pageUp ||
+        k.pageDown ||
+        k.escape
+      ) {
         return
       }
 
@@ -1010,7 +1059,7 @@ export function TextInput({
       ref={boxRef}
       width={columns}
     >
-      <Text wrap="wrap">{rendered}</Text>
+      <Text wrap="wrap-char">{rendered}</Text>
     </Box>
   )
 }
@@ -1042,22 +1091,7 @@ interface TextInputProps {
   onSubmit?: (v: string) => void
   placeholder?: string
   value: string
-  voiceRecordKey?: ParsedVoiceRecordKey
 }
-
-export const shouldPassThroughToGlobalHandler = (
-  input: string,
-  key: Key,
-  voiceRecordKey: ParsedVoiceRecordKey = DEFAULT_VOICE_RECORD_KEY
-): boolean =>
-  (key.ctrl && input === 'c') ||
-  (key.ctrl && input === 'x') ||
-  key.tab ||
-  (key.shift && key.tab) ||
-  key.pageUp ||
-  key.pageDown ||
-  key.escape ||
-  isVoiceToggleKey(key, input, voiceRecordKey)
 
 export interface TextInputMouseApi {
   dragAt: (row: number, col: number) => void

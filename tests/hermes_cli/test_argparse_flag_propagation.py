@@ -36,6 +36,8 @@ def _build_parser():
     parser.add_argument("--skills", "-s", action="append", default=None)
     parser.add_argument("--yolo", action="store_true", default=False)
     parser.add_argument("--pass-session-id", action="store_true", default=False)
+    parser.add_argument("--ignore-user-config", action="store_true", default=False)
+    parser.add_argument("--ignore-rules", action="store_true", default=False)
 
     subparsers = parser.add_subparsers(dest="command")
     chat = subparsers.add_parser("chat")
@@ -47,6 +49,10 @@ def _build_parser():
     chat.add_argument("--skills", "-s", action="append",
                       default=argparse.SUPPRESS)
     chat.add_argument("--pass-session-id", action="store_true",
+                      default=argparse.SUPPRESS)
+    chat.add_argument("--ignore-user-config", action="store_true",
+                      default=argparse.SUPPRESS)
+    chat.add_argument("--ignore-rules", action="store_true",
                       default=argparse.SUPPRESS)
     chat.add_argument("--resume", "-r", metavar="SESSION_ID",
                       default=argparse.SUPPRESS)
@@ -91,6 +97,35 @@ class TestYoloEnvVar:
         args = parser.parse_args(["chat"])
         self._simulate_cmd_chat_yolo_check(args)
         assert os.environ.get("HERMES_YOLO_MODE") is None
+
+
+class TestIgnoreFlags:
+    @pytest.fixture(autouse=True)
+    def _clean_env(self):
+        os.environ.pop("HERMES_IGNORE_USER_CONFIG", None)
+        os.environ.pop("HERMES_IGNORE_RULES", None)
+        yield
+        os.environ.pop("HERMES_IGNORE_USER_CONFIG", None)
+        os.environ.pop("HERMES_IGNORE_RULES", None)
+
+    @staticmethod
+    def _simulate_cmd_chat_ignore_checks(args):
+        if getattr(args, "ignore_user_config", False):
+            os.environ["HERMES_IGNORE_USER_CONFIG"] = "1"
+        if getattr(args, "ignore_rules", False):
+            os.environ["HERMES_IGNORE_RULES"] = "1"
+
+    def test_ignore_user_config_before_chat_sets_env(self):
+        parser = _build_parser()
+        args = parser.parse_args(["--ignore-user-config", "chat"])
+        self._simulate_cmd_chat_ignore_checks(args)
+        assert os.environ.get("HERMES_IGNORE_USER_CONFIG") == "1"
+
+    def test_ignore_rules_after_chat_sets_env(self):
+        parser = _build_parser()
+        args = parser.parse_args(["chat", "--ignore-rules"])
+        self._simulate_cmd_chat_ignore_checks(args)
+        assert os.environ.get("HERMES_IGNORE_RULES") == "1"
 
 
 class TestAcceptHooksOnAgentSubparsers:

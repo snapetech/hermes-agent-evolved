@@ -1,14 +1,14 @@
 ---
-title: "Github Auth — GitHub auth setup: HTTPS tokens, SSH keys, gh CLI login"
+title: "Github Auth — Set up GitHub authentication for the agent using git (universally available) or the gh CLI"
 sidebar_label: "Github Auth"
-description: "GitHub auth setup: HTTPS tokens, SSH keys, gh CLI login"
+description: "Set up GitHub authentication for the agent using git (universally available) or the gh CLI"
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
 # Github Auth
 
-GitHub auth setup: HTTPS tokens, SSH keys, gh CLI login.
+Set up GitHub authentication for the agent using git (universally available) or the gh CLI. Covers HTTPS tokens, SSH keys, credential helpers, and gh auth — with a detection flow to pick the right method automatically.
 
 ## Skill metadata
 

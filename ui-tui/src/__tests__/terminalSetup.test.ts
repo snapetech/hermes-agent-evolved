@@ -141,7 +141,6 @@ describe('configureTerminalKeybindings', () => {
     // it overlaps any context, including our terminal scope. We must NOT
     // silently add a terminal-scoped cmd+c that would shadow it.
     const mkdir = vi.fn().mockResolvedValue(undefined)
-
     const readFile = vi.fn().mockResolvedValue(
       JSON.stringify([
         {
@@ -150,7 +149,6 @@ describe('configureTerminalKeybindings', () => {
         }
       ])
     )
-
     const writeFile = vi.fn().mockResolvedValue(undefined)
     const copyFile = vi.fn().mockResolvedValue(undefined)
 
@@ -172,7 +170,6 @@ describe('configureTerminalKeybindings', () => {
     // would shadow ours. Treat as a conflict even though the strings
     // aren't identical.
     const mkdir = vi.fn().mockResolvedValue(undefined)
-
     const readFile = vi.fn().mockResolvedValue(
       JSON.stringify([
         {
@@ -182,7 +179,6 @@ describe('configureTerminalKeybindings', () => {
         }
       ])
     )
-
     const writeFile = vi.fn().mockResolvedValue(undefined)
     const copyFile = vi.fn().mockResolvedValue(undefined)
 
@@ -202,7 +198,6 @@ describe('configureTerminalKeybindings', () => {
     // logically disjoint from our copy-forwarding binding, which requires
     // terminalTextSelected.
     const mkdir = vi.fn().mockResolvedValue(undefined)
-
     const readFile = vi.fn().mockResolvedValue(
       JSON.stringify([
         {
@@ -213,7 +208,6 @@ describe('configureTerminalKeybindings', () => {
         }
       ])
     )
-
     const writeFile = vi.fn().mockResolvedValue(undefined)
     const copyFile = vi.fn().mockResolvedValue(undefined)
 
@@ -232,7 +226,6 @@ describe('configureTerminalKeybindings', () => {
     // clauses don't overlap. A user's pre-existing cmd+c binding scoped to
     // editor focus should NOT block our terminal-scoped cmd+c binding.
     const mkdir = vi.fn().mockResolvedValue(undefined)
-
     const readFile = vi.fn().mockResolvedValue(
       JSON.stringify([
         {
@@ -242,7 +235,6 @@ describe('configureTerminalKeybindings', () => {
         }
       ])
     )
-
     const writeFile = vi.fn().mockResolvedValue(undefined)
     const copyFile = vi.fn().mockResolvedValue(undefined)
 

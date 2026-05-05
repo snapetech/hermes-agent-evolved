@@ -120,7 +120,7 @@ class TestResolveProvider:
             monkeypatch.delenv(var, raising=False)
 
         # Set AWS credentials
-        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAIOSFODNN7EXAMPLE")
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AWS_KEY_ID_PLACEHOLDER")
         monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
 
         # Mock the auth store to have no active provider
@@ -135,7 +135,7 @@ class TestRuntimeProvider:
     def test_bedrock_runtime_resolution(self, monkeypatch):
         from hermes_cli.runtime_provider import resolve_runtime_provider
 
-        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAIOSFODNN7EXAMPLE")
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AWS_KEY_ID_PLACEHOLDER")
         monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
         monkeypatch.setenv("AWS_REGION", "eu-west-1")
 
@@ -508,7 +508,7 @@ class TestAuxiliaryClientBedrockResolution:
 
     def test_bedrock_returns_client_with_credentials(self, monkeypatch):
         """With valid AWS credentials, Bedrock should return a usable client."""
-        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAIOSFODNN7EXAMPLE")
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AWS_KEY_ID_PLACEHOLDER")
         monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
         monkeypatch.setenv("AWS_REGION", "us-west-2")
 
@@ -538,7 +538,7 @@ class TestAuxiliaryClientBedrockResolution:
 
     def test_bedrock_uses_configured_region(self, monkeypatch):
         """Bedrock client base_url should reflect AWS_REGION."""
-        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAIOSFODNN7EXAMPLE")
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AWS_KEY_ID_PLACEHOLDER")
         monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
         monkeypatch.setenv("AWS_REGION", "eu-central-1")
 
@@ -552,7 +552,7 @@ class TestAuxiliaryClientBedrockResolution:
 
     def test_bedrock_respects_explicit_model(self, monkeypatch):
         """When caller passes an explicit model, it should be used."""
-        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAIOSFODNN7EXAMPLE")
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AWS_KEY_ID_PLACEHOLDER")
         monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
 
         with patch("agent.anthropic_adapter.build_anthropic_bedrock_client",
@@ -566,7 +566,7 @@ class TestAuxiliaryClientBedrockResolution:
 
     def test_bedrock_async_mode(self, monkeypatch):
         """Async mode should return an AsyncAnthropicAuxiliaryClient."""
-        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAIOSFODNN7EXAMPLE")
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AWS_KEY_ID_PLACEHOLDER")
         monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
 
         with patch("agent.anthropic_adapter.build_anthropic_bedrock_client",
@@ -579,7 +579,7 @@ class TestAuxiliaryClientBedrockResolution:
 
     def test_bedrock_default_model_is_haiku(self, monkeypatch):
         """Default auxiliary model for Bedrock should be Haiku (fast, cheap)."""
-        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAIOSFODNN7EXAMPLE")
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AWS_KEY_ID_PLACEHOLDER")
         monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
 
         with patch("agent.anthropic_adapter.build_anthropic_bedrock_client",

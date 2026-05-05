@@ -5,6 +5,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 from gateway.config import Platform, HomeChannel, GatewayConfig, PlatformConfig
+from gateway.run import GatewayRunner
 from gateway.session import (
     SessionSource,
     SessionStore,
@@ -12,12 +13,8 @@ from gateway.session import (
     build_session_context_prompt,
     build_session_key,
     canonical_whatsapp_identifier,
+    normalize_whatsapp_identifier,
 )
-
-# Legacy name preserved for these tests; product renamed the function to
-# canonical_whatsapp_identifier.  Keep the tests referencing the old name
-# working without duplicating the suite.
-normalize_whatsapp_identifier = canonical_whatsapp_identifier
 
 
 class TestSessionSourceRoundtrip:
@@ -89,14 +86,140 @@ class TestSessionSourceRoundtrip:
         assert restored.chat_topic is None
         assert restored.chat_type == "dm"
 
-    def test_unknown_platform_rejected_for_bad_names(self):
-        """Arbitrary platform names are rejected (no accidental enum pollution).
-
-        Only bundled platform plugins (discovered under ``plugins/platforms/``)
-        and runtime-registered plugins get dynamic enum members.
-        """
-        with pytest.raises(ValueError):
+    def test_invalid_platform_raises(self):
+        with pytest.raises((ValueError, KeyError)):
             SessionSource.from_dict({"platform": "nonexistent", "chat_id": "1"})
+
+
+class TestChannelProfiles:
+    def test_gateway_config_parses_channel_profiles(self):
+        cfg = GatewayConfig.from_dict({
+            "channel_profiles": {
+                "discord": {
+                    "123": {
+                        "name": "hermes_sue",
+                        "session_scope": "channel_shared",
+                        "db_namespace": "sue-db",
+                        "memory_namespace": "sue-memory",
+                        "model": {"provider": "anthropic", "model": "claude-sonnet-4-6"},
+                        "fallback_providers": [
+                            {"provider": "custom", "model": "gemma4-26b-a4b-it:q4km"},
+                            {"provider": "custom", "model": "qwen3.6-35b-a3b:iq4xs"},
+                        ],
+                        "reasoning": {"effort": "high"},
+                        "tools": {"disable_toolsets": ["terminal"]},
+                        "system_prompt_append": "Think carefully.",
+                    }
+                }
+            }
+        })
+
+        profile = cfg.channel_profiles[Platform.DISCORD]["123"]
+        assert profile.name == "hermes_sue"
+        assert profile.session_scope == "channel_shared"
+        assert profile.db_namespace == "sue-db"
+        assert profile.memory_namespace == "sue-memory"
+        assert profile.model["model"] == "claude-sonnet-4-6"
+        assert [item["model"] for item in profile.fallback_providers] == [
+            "gemma4-26b-a4b-it:q4km",
+            "qwen3.6-35b-a3b:iq4xs",
+        ]
+        assert profile.reasoning["effort"] == "high"
+
+    def test_profile_session_store_uses_prefix_and_shared_channel_scope(self, tmp_path):
+        cfg = GatewayConfig.from_dict({
+            "group_sessions_per_user": False,
+        })
+        store = SessionStore(
+            tmp_path / "sessions",
+            cfg,
+            db_path=tmp_path / "state.db",
+            session_key_prefix="profile:hermes_sue",
+        )
+
+        alice = SessionSource(
+            platform=Platform.DISCORD,
+            chat_id="123",
+            chat_type="group",
+            user_id="alice",
+        )
+        bob = SessionSource(
+            platform=Platform.DISCORD,
+            chat_id="123",
+            chat_type="group",
+            user_id="bob",
+        )
+
+        alice_entry = store.get_or_create_session(alice)
+        bob_entry = store.get_or_create_session(bob)
+
+        assert alice_entry.session_key == "profile:hermes_sue:agent:main:discord:group:123"
+        assert bob_entry.session_key == alice_entry.session_key
+        assert bob_entry.session_id == alice_entry.session_id
+
+    def test_runner_matches_profile_by_channel_id_parent_id_or_name(self):
+        cfg = GatewayConfig.from_dict({
+            "channel_profiles": {
+                "discord": {
+                    "123": {"name": "by-id"},
+                    "456": {"name": "by-parent"},
+                    "#hermes_sue": {"name": "by-name"},
+                }
+            }
+        })
+        runner = object.__new__(GatewayRunner)
+        runner.config = cfg
+
+        direct = SessionSource(platform=Platform.DISCORD, chat_id="123", chat_type="channel")
+        thread = SessionSource(
+            platform=Platform.DISCORD,
+            chat_id="thread-1",
+            parent_chat_id="456",
+            chat_type="thread",
+        )
+        named = SessionSource(
+            platform=Platform.DISCORD,
+            chat_id="789",
+            chat_name="hermes_sue",
+            chat_type="channel",
+        )
+
+        assert runner._channel_profile_for_source(direct).name == "by-id"
+        assert runner._channel_profile_for_source(thread).name == "by-parent"
+        assert runner._channel_profile_for_source(named).name == "by-name"
+
+    def test_research_tool_mode_removes_coding_and_host_control_toolsets(self):
+        profile = GatewayConfig.from_dict({
+            "channel_profiles": {
+                "discord": {
+                    "123": {
+                        "name": "hermes_sue",
+                        "tools": {
+                            "mode": "research",
+                            "enable_toolsets": ["memory"],
+                            "disable_toolsets": ["image_gen"],
+                        },
+                    }
+                }
+            }
+        }).channel_profiles[Platform.DISCORD]["123"]
+
+        enabled = GatewayRunner._apply_channel_profile_tool_overlay(
+            [
+                "browser",
+                "code_execution",
+                "delegation",
+                "file",
+                "image_gen",
+                "memory",
+                "session_search",
+                "terminal",
+                "web",
+            ],
+            profile,
+        )
+
+        assert enabled == ["memory", "session_search", "web"]
 
 
 class TestSessionSourceDescription:
@@ -1243,7 +1366,7 @@ class TestRewriteTranscriptPreservesReasoning:
         assert after[0].get("reasoning_details") == [{"type": "summary", "text": "step by step"}]
         assert after[0].get("codex_reasoning_items") == [{"id": "r1", "type": "reasoning"}]
 
-    def test_db_rewrite_is_atomic_on_insert_failure(self, tmp_path, monkeypatch):
+    def test_db_rewrite_is_atomic_on_insert_failure(self, tmp_path):
         from hermes_state import SessionDB
 
         db = SessionDB(db_path=tmp_path / "test.db")
@@ -1258,27 +1381,16 @@ class TestRewriteTranscriptPreservesReasoning:
         store._db = db
         store._loaded = True
 
-        # Force the second insert inside replace_messages to fail, simulating
-        # any storage-layer error that might abort a multi-row rewrite.
-        real_encode = SessionDB._encode_content
-        calls = {"n": 0}
-
-        def flaky_encode(cls, content):
-            calls["n"] += 1
-            if calls["n"] == 2:
-                raise RuntimeError("simulated storage failure")
-            return real_encode.__func__(cls, content)
-
-        monkeypatch.setattr(SessionDB, "_encode_content", classmethod(flaky_encode))
-
         replacement = [
             {"role": "user", "content": "after user"},
-            {"role": "assistant", "content": "after assistant"},
+            {
+                "role": "assistant",
+                "content": {"not": "sqlite-bindable but JSONL-safe"},
+            },
         ]
 
         store.rewrite_transcript(session_id, replacement)
 
-        # The rewrite must roll back atomically — original messages preserved.
         after = db.get_messages_as_conversation(session_id)
         assert [msg["content"] for msg in after] == [
             "before user",

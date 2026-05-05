@@ -9,6 +9,8 @@ from tools.approval import (
     check_all_command_guards,
     check_dangerous_command,
     detect_dangerous_command,
+    extract_runtime_apt_install_packages,
+    is_runtime_package_install_command,
 )
 
 
@@ -256,3 +258,54 @@ class TestCronModeInteractions:
 
         result = check_dangerous_command("rm -rf /tmp/stuff", "local")
         assert result["approved"]
+
+
+class TestRuntimePackageInstallApproval:
+    def test_runtime_package_install_parser_accepts_simple_apt_chains(self):
+        assert is_runtime_package_install_command(
+            "sudo -n apt-get update && "
+            "sudo -n DEBIAN_FRONTEND=noninteractive apt-get install -y "
+            "--no-install-recommends ffmpeg yt-dlp"
+        )
+        assert is_runtime_package_install_command(
+            "bash -lc 'sudo -n apt-get update && sudo -n apt-get install -y tesseract-ocr'"
+        )
+        assert extract_runtime_apt_install_packages(
+            "sudo -n apt-get update && sudo -n apt-get install -y ffmpeg yt-dlp"
+        ) == ["ffmpeg", "yt-dlp"]
+
+    def test_runtime_package_install_parser_rejects_extra_shell_work(self):
+        assert not is_runtime_package_install_command("sudo -n apt-get install -y ffmpeg && rm -rf /tmp/stuff")
+        assert not is_runtime_package_install_command("sudo -n apt-get purge -y ffmpeg")
+        assert not is_runtime_package_install_command("sudo -n apt-get install -y ./local.deb")
+        assert extract_runtime_apt_install_packages("sudo -n apt-get install -y ./local.deb") == []
+
+    def test_combined_guard_allows_trusted_container_apt_without_prompt(self, monkeypatch):
+        monkeypatch.setenv("HERMES_GATEWAY_SESSION", "1")
+        monkeypatch.setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
+        monkeypatch.delenv("HERMES_INTERACTIVE", raising=False)
+        monkeypatch.delenv("HERMES_EXEC_ASK", raising=False)
+        monkeypatch.delenv("HERMES_YOLO_MODE", raising=False)
+
+        result = check_all_command_guards(
+            "bash -lc 'sudo -n apt-get update && sudo -n apt-get install -y tesseract-ocr'",
+            "local",
+        )
+
+        assert result["approved"]
+        assert result["runtime_package_install"] is True
+
+    def test_runtime_apt_bypass_can_be_disabled(self, monkeypatch):
+        monkeypatch.setenv("HERMES_GATEWAY_SESSION", "1")
+        monkeypatch.setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
+        monkeypatch.setenv("HERMES_ALLOW_RUNTIME_APT", "0")
+        monkeypatch.delenv("HERMES_INTERACTIVE", raising=False)
+        monkeypatch.delenv("HERMES_EXEC_ASK", raising=False)
+        monkeypatch.delenv("HERMES_YOLO_MODE", raising=False)
+
+        result = check_all_command_guards(
+            "bash -lc 'sudo -n apt-get update && sudo -n apt-get install -y tesseract-ocr'",
+            "local",
+        )
+
+        assert not result["approved"]

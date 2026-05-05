@@ -1,14 +1,14 @@
 ---
-title: "Polymarket — Query Polymarket: markets, prices, orderbooks, history"
+title: "Polymarket — Query Polymarket prediction market data — search markets, get prices, orderbooks, and price history"
 sidebar_label: "Polymarket"
-description: "Query Polymarket: markets, prices, orderbooks, history"
+description: "Query Polymarket prediction market data — search markets, get prices, orderbooks, and price history"
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
 # Polymarket
 
-Query Polymarket: markets, prices, orderbooks, history.
+Query Polymarket prediction market data — search markets, get prices, orderbooks, and price history. Read-only via public REST APIs, no API key needed.
 
 ## Skill metadata
 

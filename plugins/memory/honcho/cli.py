@@ -12,7 +12,6 @@ from pathlib import Path
 
 from hermes_constants import get_hermes_home
 from plugins.memory.honcho.client import resolve_active_host, resolve_config_path, HOST
-from hermes_cli.config import cfg_get
 
 
 def clone_honcho_for_profile(profile_name: str) -> bool:
@@ -107,7 +106,7 @@ def cmd_enable(args) -> None:
 
     # If this is a new profile host block with no settings, clone from default
     if not block.get("aiPeer"):
-        default_block = cfg_get(cfg, "hosts", HOST, default={})
+        default_block = cfg.get("hosts", {}).get(HOST, {})
         for key in ("recallMode", "writeFrequency", "sessionStrategy",
                     "contextTokens", "dialecticReasoningLevel", "dialecticDynamic",
                     "dialecticMaxChars", "messageMaxChars", "dialecticMaxInputChars",
@@ -140,7 +139,7 @@ def cmd_disable(args) -> None:
     cfg = _read_config()
     host = _host_key()
     label = f"[{host}] " if host != "hermes" else ""
-    block = cfg_get(cfg, "hosts", host, default={})
+    block = cfg.get("hosts", {}).get(host, {})
 
     if not block or block.get("enabled") is False:
         print(f"  {label}Honcho is already disabled.\n")
@@ -213,7 +212,7 @@ def sync_honcho_profiles_quiet() -> int:
     if not cfg:
         return 0
 
-    default_block = cfg_get(cfg, "hosts", HOST, default={})
+    default_block = cfg.get("hosts", {}).get(HOST, {})
     has_key = bool(cfg.get("apiKey") or os.environ.get("HONCHO_API_KEY"))
     if not default_block and not has_key:
         return 0

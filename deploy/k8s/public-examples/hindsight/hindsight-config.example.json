@@ -1,0 +1,14 @@
+{
+  "mode": "local_external",
+  "api_url": "http://hindsight.hermes.svc.cluster.local:8888",
+  "llm_provider": "openai_compatible",
+  "llm_base_url": "https://model-endpoint.example/v1",
+  "llm_model": "replace-model-name",
+  "embedding_provider": "openai_compatible",
+  "embedding_base_url": "https://embedding-endpoint.example/v1",
+  "embedding_model": "replace-embedding-model",
+  "memory_mode": "hybrid",
+  "retain_context": "cluster-hosted Hermes deployment",
+  "bank_mission": "Long-term memory for a persistent Hermes agent."
+}
+

@@ -2,7 +2,6 @@
 
 import json
 import os
-from pathlib import Path
 from types import SimpleNamespace
 
 from gateway import status
@@ -246,27 +245,6 @@ class TestGatewayPidState:
 
 
 class TestGatewayRuntimeStatus:
-    def test_write_json_file_uses_atomic_json_write(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-        calls = []
-
-        def _fake_atomic_json_write(path, payload, **kwargs):
-            calls.append((Path(path), payload, kwargs))
-
-        monkeypatch.setattr(status, "atomic_json_write", _fake_atomic_json_write)
-
-        payload = {"gateway_state": "running"}
-        target = tmp_path / "gateway_state.json"
-        status._write_json_file(target, payload)
-
-        assert calls == [
-            (
-                target,
-                payload,
-                {"indent": None, "separators": (",", ":")},
-            )
-        ]
-
     def test_write_runtime_status_overwrites_stale_pid_on_restart(self, tmp_path, monkeypatch):
         """Regression: setdefault() preserved stale PID from previous process (#1631)."""
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
@@ -334,6 +312,24 @@ class TestGatewayRuntimeStatus:
         assert payload["platforms"]["discord"]["error_code"] is None
         assert payload["platforms"]["discord"]["error_message"] is None
 
+    def test_write_runtime_status_records_pending_restart_and_runtime_reload(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+        status.write_runtime_status(
+            gateway_state="running",
+            restart_requested=False,
+            auto_restart_pending=True,
+            auto_restart_reason="repo Python sources changed on disk",
+            last_runtime_reload_at="2026-04-23T18:10:00+00:00",
+        )
+
+        payload = status.read_runtime_status()
+        assert payload["gateway_state"] == "running"
+        assert payload["restart_requested"] is False
+        assert payload["auto_restart_pending"] is True
+        assert payload["auto_restart_reason"] == "repo Python sources changed on disk"
+        assert payload["last_runtime_reload_at"] == "2026-04-23T18:10:00+00:00"
+
 
 class TestTerminatePid:
     def test_force_uses_taskkill_on_windows(self, monkeypatch):
@@ -371,35 +367,6 @@ class TestTerminatePid:
 
 
 class TestScopedLocks:
-    def test_windows_file_lock_uses_high_offset(self, tmp_path, monkeypatch):
-        lock_path = tmp_path / "gateway.lock"
-        handle = open(lock_path, "a+", encoding="utf-8")
-        fd = handle.fileno()
-        calls = []
-
-        def fake_locking(fd, mode, size):
-            calls.append((fd, mode, size, handle.tell()))
-
-        monkeypatch.setattr(status, "_IS_WINDOWS", True)
-        monkeypatch.setattr(
-            status,
-            "msvcrt",
-            SimpleNamespace(LK_NBLCK=1, LK_UNLCK=2, locking=fake_locking),
-            raising=False,
-        )
-
-        try:
-            assert status._try_acquire_file_lock(handle) is True
-            status._release_file_lock(handle)
-        finally:
-            handle.close()
-
-        assert calls == [
-            (fd, 1, 1, status._WINDOWS_LOCK_OFFSET),
-            (fd, 2, 1, status._WINDOWS_LOCK_OFFSET),
-        ]
-        assert lock_path.read_text(encoding="utf-8") == "\n"
-
     def test_acquire_scoped_lock_rejects_live_other_process(self, tmp_path, monkeypatch):
         monkeypatch.setenv("HERMES_GATEWAY_LOCK_DIR", str(tmp_path / "locks"))
         lock_path = tmp_path / "locks" / "telegram-bot-token-2bb80d537b1da3e3.lock"
@@ -702,88 +669,3 @@ class TestTakeoverMarker:
 
         # We are not the target — must NOT consume as planned
         assert result is False
-
-
-class TestPlannedStopMarker:
-    """Tests for intentional service/manual gateway stop markers."""
-
-    def test_write_marker_records_target_identity(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-        monkeypatch.setattr(status, "_get_process_start_time", lambda pid: 42)
-
-        ok = status.write_planned_stop_marker(target_pid=12345)
-
-        assert ok is True
-        marker = tmp_path / ".gateway-planned-stop.json"
-        assert marker.exists()
-        payload = json.loads(marker.read_text())
-        assert payload["target_pid"] == 12345
-        assert payload["target_start_time"] == 42
-        assert payload["stopper_pid"] == os.getpid()
-        assert "written_at" in payload
-
-    def test_consume_returns_true_when_marker_names_self(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-        monkeypatch.setattr(status, "_get_process_start_time", lambda pid: 100)
-        ok = status.write_planned_stop_marker(target_pid=os.getpid())
-        assert ok is True
-
-        result = status.consume_planned_stop_marker_for_self()
-
-        assert result is True
-        assert not (tmp_path / ".gateway-planned-stop.json").exists()
-
-    def test_consume_returns_false_for_different_pid(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-        monkeypatch.setattr(status, "_get_process_start_time", lambda pid: 100)
-        ok = status.write_planned_stop_marker(target_pid=os.getpid() + 9999)
-        assert ok is True
-
-        result = status.consume_planned_stop_marker_for_self()
-
-        assert result is False
-        assert not (tmp_path / ".gateway-planned-stop.json").exists()
-
-    def test_consume_returns_false_for_stale_marker(self, tmp_path, monkeypatch):
-        from datetime import datetime, timezone, timedelta
-
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-        marker_path = tmp_path / ".gateway-planned-stop.json"
-        stale_time = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
-        marker_path.write_text(json.dumps({
-            "target_pid": os.getpid(),
-            "target_start_time": 123,
-            "stopper_pid": 99999,
-            "written_at": stale_time,
-        }))
-        monkeypatch.setattr(status, "_get_process_start_time", lambda pid: 123)
-
-        result = status.consume_planned_stop_marker_for_self()
-
-        assert result is False
-        assert not marker_path.exists()
-
-    def test_clear_planned_stop_marker_is_idempotent(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-        monkeypatch.setattr(status, "_get_process_start_time", lambda pid: 100)
-
-        status.clear_planned_stop_marker()
-        status.write_planned_stop_marker(target_pid=12345)
-        assert (tmp_path / ".gateway-planned-stop.json").exists()
-
-        status.clear_planned_stop_marker()
-
-        assert not (tmp_path / ".gateway-planned-stop.json").exists()
-        status.clear_planned_stop_marker()
-
-    def test_write_marker_returns_false_on_write_failure(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-
-        def raise_oserror(*args, **kwargs):
-            raise OSError("simulated write failure")
-
-        monkeypatch.setattr(status, "_write_json_file", raise_oserror)
-
-        ok = status.write_planned_stop_marker(target_pid=12345)
-
-        assert ok is False

@@ -1,14 +1,14 @@
 ---
-title: "Test Driven Development — TDD: enforce RED-GREEN-REFACTOR, tests before code"
+title: "Test Driven Development — Use when implementing any feature or bugfix, before writing implementation code"
 sidebar_label: "Test Driven Development"
-description: "TDD: enforce RED-GREEN-REFACTOR, tests before code"
+description: "Use when implementing any feature or bugfix, before writing implementation code"
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
 # Test Driven Development
 
-TDD: enforce RED-GREEN-REFACTOR, tests before code.
+Use when implementing any feature or bugfix, before writing implementation code. Enforces RED-GREEN-REFACTOR cycle with test-first approach.
 
 ## Skill metadata
 

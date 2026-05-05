@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: hermes-gateway
+  namespace: hermes
+spec:
+  selector:
+    app: hermes-gateway
+  ports:
+    - name: api
+      port: 8642
+      targetPort: 8642
+

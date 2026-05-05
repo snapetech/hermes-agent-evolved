@@ -10,7 +10,7 @@ Matches OpenClaw's 9-tool MCP channel bridge surface:
   events_poll, events_wait, messages_send, permissions_list_open,
   permissions_respond
 
-Plus: channels_list (Hermes-specific extra)
+Plus: channels_list and discord_channel_history (Hermes-specific extras)
 
 Usage:
     hermes mcp serve
@@ -787,6 +787,41 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
                         })
 
         return json.dumps({"count": len(channels), "channels": channels}, indent=2)
+
+    # -- discord_channel_history -------------------------------------------
+
+    @mcp.tool()
+    def discord_channel_history(
+        channel: Optional[str] = None,
+        limit: int = 50,
+        before: Optional[str] = None,
+        after: Optional[str] = None,
+        around: Optional[str] = None,
+    ) -> str:
+        """Read recent messages from a Discord channel visible to the bot.
+
+        Requires DISCORD_BOT_TOKEN and Discord bot permissions for the target
+        channel: View Channel and Read Message History. Use channels_list first
+        to discover cached Discord channel IDs/names when needed.
+
+        Args:
+            channel: Discord channel ID, discord:<channel_id>, #name, or empty for DISCORD_HOME_CHANNEL
+            limit: Number of messages to read, 1-100
+            before: Optional Discord message ID cursor
+            after: Optional Discord message ID cursor
+            around: Optional Discord message ID cursor
+        """
+        try:
+            from tools.discord_history_tool import discord_channel_history as read_history
+            return read_history({
+                "channel": channel or "",
+                "limit": limit,
+                "before": before,
+                "after": after,
+                "around": around,
+            })
+        except Exception as e:
+            return json.dumps({"error": f"Discord history read failed: {e}"})
 
     # -- permissions_list_open ---------------------------------------------
 

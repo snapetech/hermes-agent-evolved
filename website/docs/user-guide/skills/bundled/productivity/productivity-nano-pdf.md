@@ -1,14 +1,14 @@
 ---
-title: "Nano Pdf — Edit PDF text/typos/titles via nano-pdf CLI (NL prompts)"
+title: "Nano Pdf — Edit PDFs with natural-language instructions using the nano-pdf CLI"
 sidebar_label: "Nano Pdf"
-description: "Edit PDF text/typos/titles via nano-pdf CLI (NL prompts)"
+description: "Edit PDFs with natural-language instructions using the nano-pdf CLI"
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
 # Nano Pdf
 
-Edit PDF text/typos/titles via nano-pdf CLI (NL prompts).
+Edit PDFs with natural-language instructions using the nano-pdf CLI. Modify text, fix typos, update titles, and make content changes to specific pages without manual editing.
 
 ## Skill metadata
 

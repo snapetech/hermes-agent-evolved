@@ -27,6 +27,10 @@ class TestApprovalModeParsing:
         with mock_patch("hermes_cli.config.load_config", return_value={"approvals": {"mode": "off"}}):
             assert _get_approval_mode() == "off"
 
+    def test_string_yolo_maps_to_off(self):
+        with mock_patch("hermes_cli.config.load_config", return_value={"approvals": {"mode": "yolo"}}):
+            assert _get_approval_mode() == "off"
+
 
 class TestSmartApproval:
     def test_smart_approval_uses_call_llm(self):

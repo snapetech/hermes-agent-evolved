@@ -80,19 +80,15 @@ class CopilotACPClientSafetyTests(unittest.TestCase):
             secret_file = root / "config.env"
             secret_file.write_text("OPENAI_API_KEY=sk-proj-abc123def456ghi789jkl012")
 
-            # agent.redact snapshots HERMES_REDACT_SECRETS at import time into
-            # _REDACT_ENABLED, so patching os.environ is a no-op. Flip the
-            # module-level constant directly for the duration of the call.
-            with patch("agent.redact._REDACT_ENABLED", True):
-                response = self._dispatch(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 3,
-                        "method": "fs/read_text_file",
-                        "params": {"path": str(secret_file)},
-                    },
-                    cwd=str(root),
-                )
+            response = self._dispatch(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "method": "fs/read_text_file",
+                    "params": {"path": str(secret_file)},
+                },
+                cwd=str(root),
+            )
 
         content = ((response.get("result") or {}).get("content") or "")
         self.assertNotIn("abc123def456", content)
@@ -144,6 +140,39 @@ class CopilotACPClientSafetyTests(unittest.TestCase):
 
         self.assertIn("error", response)
         self.assertFalse(outside.exists())
+
+    def test_write_text_file_denies_legacy_repo_path_when_canonical_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            canonical = root / "workspace" / "hermes-agent-private"
+            legacy = root / "hermes-agent"
+            target = legacy / "skills" / "putter" / "SKILL.md"
+            canonical.mkdir(parents=True)
+            target.parent.mkdir(parents=True, exist_ok=True)
+
+            with patch.dict(
+                os.environ,
+                {
+                    "HERMES_REPO_SYNC_TARGET": str(canonical),
+                    "HERMES_REPO_SYNC_READ_ONLY_SOURCES": str(legacy),
+                },
+                clear=False,
+            ):
+                response = self._dispatch(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 6,
+                        "method": "fs/write_text_file",
+                        "params": {
+                            "path": str(target),
+                            "content": "should-not-write",
+                        },
+                    },
+                    cwd=str(root),
+                )
+
+        self.assertIn("error", response)
+        self.assertFalse(target.exists())
 
 
 if __name__ == "__main__":

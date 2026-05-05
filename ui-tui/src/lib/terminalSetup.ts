@@ -336,7 +336,6 @@ export async function configureTerminalKeybindings(
     }
 
     const targets = targetBindings(platform)
-
     const conflicts = targets.filter(target =>
       keybindings.some(existing => isKeybinding(existing) && bindingsConflict(existing, target))
     )

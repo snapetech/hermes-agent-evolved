@@ -132,7 +132,7 @@ def _channel_type_name(type_id: int) -> str:
 # ---------------------------------------------------------------------------
 
 # Module-level cache so the app/me endpoint is hit at most once per process.
-_capability_cache: Dict[str, Dict[str, Any]] = {}
+_capability_cache: Optional[Dict[str, Any]] = None
 
 
 def _detect_capabilities(token: str, *, force: bool = False) -> Dict[str, Any]:
@@ -148,8 +148,8 @@ def _detect_capabilities(token: str, *, force: bool = False) -> Dict[str, Any]:
     Cached in a module-global. Pass ``force=True`` to re-fetch.
     """
     global _capability_cache
-    if token in _capability_cache and not force:
-        return _capability_cache[token]
+    if _capability_cache is not None and not force:
+        return _capability_cache
 
     caps: Dict[str, Any] = {
         "has_members_intent": True,
@@ -172,14 +172,14 @@ def _detect_capabilities(token: str, *, force: bool = False) -> Dict[str, Any]:
             "Discord capability detection failed (%s); exposing all actions.", exc,
         )
 
-    _capability_cache[token] = caps
+    _capability_cache = caps
     return caps
 
 
 def _reset_capability_cache() -> None:
     """Test hook: clear the detection cache."""
     global _capability_cache
-    _capability_cache = {}
+    _capability_cache = None
 
 
 # ---------------------------------------------------------------------------

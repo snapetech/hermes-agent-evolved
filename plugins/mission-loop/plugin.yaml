@@ -1,0 +1,6 @@
+name: mission-loop
+version: 0.1.0
+description: Durable Ralph-style mission loops with fresh agent iterations, filesystem state, verifier gates, and bounded execution.
+author: Keith Stack
+provides_tools:
+  - mission_loop

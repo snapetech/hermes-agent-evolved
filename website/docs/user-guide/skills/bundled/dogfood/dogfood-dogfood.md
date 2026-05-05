@@ -1,14 +1,14 @@
 ---
-title: "Dogfood — Exploratory QA of web apps: find bugs, evidence, reports"
+title: "Dogfood"
 sidebar_label: "Dogfood"
-description: "Exploratory QA of web apps: find bugs, evidence, reports"
+description: "Systematic exploratory QA testing of web applications — find bugs, capture evidence, and generate structured reports"
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
 # Dogfood
 
-Exploratory QA of web apps: find bugs, evidence, reports.
+Systematic exploratory QA testing of web applications — find bugs, capture evidence, and generate structured reports
 
 ## Skill metadata
 
@@ -50,13 +50,11 @@ Follow this 5-phase systematic workflow:
 ### Phase 1: Plan
 
 1. Create the output directory structure:
-<!-- ascii-guard-ignore -->
    ```
    {output_dir}/
    ├── screenshots/       # Evidence screenshots
    └── report.md          # Final report (generated in Phase 5)
    ```
-<!-- ascii-guard-ignore-end -->
 2. Identify the testing scope based on user input.
 3. Build a rough sitemap by planning which pages and features to test:
    - Landing/home page

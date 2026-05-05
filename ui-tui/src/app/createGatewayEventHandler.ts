@@ -282,16 +282,6 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
 
         setStatus(p.text)
 
-        if (p.kind === 'compressing') {
-          sys(p.text)
-          return
-        }
-
-        if (p.kind === 'goal') {
-          sys(p.text)
-          return
-        }
-
         if (!p.kind || p.kind === 'status') {
           return
         }
@@ -313,16 +303,6 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
         const line = String(ev.payload.line).slice(0, 120)
 
         turnController.pushActivity(line, 'info')
-
-        return
-      }
-
-      case 'browser.progress': {
-        const message = String(ev.payload?.message ?? '').trim()
-
-        if (message) {
-          sys(message)
-        }
 
         return
       }
@@ -393,7 +373,6 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
         // 120-char clip used for `gateway.stderr` activity entries.
         const STDERR_LINE_CAP = 120
         const STDERR_LINES_MAX = 8
-
         const tailLines = (stderrTail ?? '')
           .split('\n')
           .map(l => l.trim())
@@ -514,20 +493,6 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
         sys(`[bg ${ev.payload.task_id}] ${ev.payload.text}`)
 
         return
-
-      case 'review.summary': {
-        // Self-improvement background review emitted a persistent summary
-        // of what it saved to memory/skills. Surface it as a system line
-        // in the transcript so it never gets lost to a transient status
-        // flash. Python-side already formats it as "💾 Self-improvement
-        // review: …".
-        const text = String(ev.payload?.text ?? '').trim()
-        if (text) {
-          sys(text)
-        }
-
-        return
-      }
 
       case 'subagent.spawn_requested':
         // Child built but not yet running (waiting on ThreadPoolExecutor slot).

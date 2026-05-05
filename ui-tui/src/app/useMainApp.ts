@@ -17,8 +17,7 @@ import type {
 import { useGitBranch } from '../hooks/useGitBranch.js'
 import { useVirtualHistory } from '../hooks/useVirtualHistory.js'
 import { appendTranscriptMessage } from '../lib/messages.js'
-import { composerPromptWidth } from '../lib/inputMetrics.js'
-import { DEFAULT_VOICE_RECORD_KEY, isMac, type ParsedVoiceRecordKey } from '../lib/platform.js'
+import { isMac } from '../lib/platform.js'
 import { asRpcResult, rpcErrorMessage } from '../lib/rpc.js'
 import { terminalParityHints } from '../lib/terminalParity.js'
 import { buildToolTrailLine, sameToolTrailGroup, toolTrailLabel } from '../lib/text.js'
@@ -104,7 +103,6 @@ export function useMainApp(gw: GatewayClient) {
   const [voiceEnabled, setVoiceEnabled] = useState(false)
   const [voiceRecording, setVoiceRecording] = useState(false)
   const [voiceProcessing, setVoiceProcessing] = useState(false)
-  const [voiceRecordKey, setVoiceRecordKey] = useState<ParsedVoiceRecordKey>(DEFAULT_VOICE_RECORD_KEY)
   const [sessionStartedAt, setSessionStartedAt] = useState(() => Date.now())
   const [turnStartedAt, setTurnStartedAt] = useState<null | number>(null)
   const [goodVibesTick, setGoodVibesTick] = useState(0)
@@ -246,8 +244,7 @@ export function useMainApp(gw: GatewayClient) {
   }, [ui.detailsMode, ui.detailsModeCommandOverride, ui.sections])
 
   const detailsVisible = detailsLayoutKey !== 'hidden:hidden'
-  const userPromptWidth = composerPromptWidth(ui.theme.brand.prompt)
-  const heightCacheKey = `${ui.sid ?? 'draft'}:${cols}:${userPromptWidth}:${ui.compact ? '1' : '0'}:${detailsLayoutKey}`
+  const heightCacheKey = `${ui.sid ?? 'draft'}:${cols}:${ui.compact ? '1' : '0'}:${detailsLayoutKey}`
 
   const heightCache = useMemo(() => {
     let cache = heightCachesRef.current.get(heightCacheKey)
@@ -269,10 +266,9 @@ export function useMainApp(gw: GatewayClient) {
       estimatedMsgHeight(virtualRows[index]!.msg, cols, {
         compact: ui.compact,
         details: detailsVisible,
-        limitHistory: index < virtualRows.length - FULL_RENDER_TAIL_ITEMS,
-        userPrompt: ui.theme.brand.prompt
+        limitHistory: index < virtualRows.length - FULL_RENDER_TAIL_ITEMS
       }),
-    [cols, detailsVisible, ui.compact, ui.theme.brand.prompt, virtualRows]
+    [cols, detailsVisible, ui.compact, virtualRows]
   )
 
   const syncHeightCache = useCallback(
@@ -362,13 +358,6 @@ export function useMainApp(gw: GatewayClient) {
   const die = useCallback(() => {
     gw.kill()
     exit()
-    // Ink's exit() calls unmount() which resets terminal modes but does NOT
-    // call process.exit().  Without an explicit exit the Node process stays
-    // alive (stdin listener keeps the event loop open), so the process.on('exit')
-    // handler in entry.tsx — which sends the final resetTerminalModes() — never
-    // fires.  This leaves kitty keyboard protocol, mouse modes, etc. enabled
-    // in the parent shell.  See issue #19194.
-    process.exit(0)
   }, [exit, gw])
 
   const session = useSessionLifecycle({
@@ -395,7 +384,7 @@ export function useMainApp(gw: GatewayClient) {
     }
   }, [ui.busy])
 
-  useConfigSync({ gw, setBellOnComplete, setVoiceEnabled, setVoiceRecordKey, sid: ui.sid })
+  useConfigSync({ gw, setBellOnComplete, setVoiceEnabled, sid: ui.sid })
 
   // Tab title: `⚠` waiting on approval/sudo/secret/clarify, `⏳` busy, `✓` idle.
   const model = ui.info?.model?.replace(/^.*\//, '') ?? ''
@@ -540,7 +529,6 @@ export function useMainApp(gw: GatewayClient) {
     terminal: { hasSelection, scrollRef, scrollWithSelection, selection, stdout },
     voice: {
       enabled: voiceEnabled,
-      recordKey: voiceRecordKey,
       recording: voiceRecording,
       setProcessing: setVoiceProcessing,
       setRecording: setVoiceRecording,
@@ -606,10 +594,10 @@ export function useMainApp(gw: GatewayClient) {
     gw.on('exit', exitHandler)
     gw.drain()
 
-    // entry.tsx's setupGracefulExit handles process cleanup on real exit.
     return () => {
       gw.off('event', handler)
       gw.off('exit', exitHandler)
+      gw.kill()
     }
   }, [gw, sys])
 
@@ -644,7 +632,7 @@ export function useMainApp(gw: GatewayClient) {
         },
         slashFlightRef,
         transcript: { page, panel, send, setHistoryItems, sys, trimLastExchange: session.trimLastExchange },
-        voice: { setVoiceEnabled, setVoiceRecordKey }
+        voice: { setVoiceEnabled }
       }),
     [
       catalog,
@@ -723,9 +711,6 @@ export function useMainApp(gw: GatewayClient) {
   const anyPanelVisible = SECTION_NAMES.some(
     s => sectionMode(s, ui.detailsMode, ui.sections, ui.detailsModeCommandOverride) !== 'hidden'
   )
-  const thinkingPanelVisible = sectionMode('thinking', ui.detailsMode, ui.sections, ui.detailsModeCommandOverride) !== 'hidden'
-  const toolsPanelVisible = sectionMode('tools', ui.detailsMode, ui.sections, ui.detailsModeCommandOverride) !== 'hidden'
-  const activityPanelVisible = sectionMode('activity', ui.detailsMode, ui.sections, ui.detailsModeCommandOverride) !== 'hidden'
 
   const showProgressArea = useTurnSelector(state =>
     anyPanelVisible
@@ -733,25 +718,12 @@ export function useMainApp(gw: GatewayClient) {
           ui.busy ||
           state.outcome ||
           state.streamPendingTools.length ||
-          state.streamSegments.some(segment => {
-            const hasThinking = Boolean(segment.thinking?.trim())
-            const hasTrailTools = Boolean(segment.tools?.length)
-
-            if (segment.kind === 'trail' && !segment.text) {
-              return (thinkingPanelVisible && hasThinking) || ((toolsPanelVisible || activityPanelVisible) && hasTrailTools)
-            }
-
-            return (
-              Boolean(segment.text?.trim()) ||
-              (thinkingPanelVisible && hasThinking) ||
-              ((toolsPanelVisible || activityPanelVisible) && hasTrailTools)
-            )
-          }) ||
+          state.streamSegments.length ||
           state.subagents.length ||
           state.tools.length ||
           state.todos.length ||
           state.turnTrail.length ||
-          (thinkingPanelVisible && hasReasoning) ||
+          hasReasoning ||
           state.activity.length
         )
       : state.activity.some(item => item.tone !== 'info')
@@ -784,10 +756,9 @@ export function useMainApp(gw: GatewayClient) {
       queueEditIdx: composerState.queueEditIdx,
       queuedDisplay: composerState.queuedDisplay,
       submit,
-      updateInput: composerActions.setInput,
-      voiceRecordKey
+      updateInput: composerActions.setInput
     }),
-    [cols, composerActions, composerState, empty, pagerPageSize, submit, voiceRecordKey]
+    [cols, composerActions, composerState, empty, pagerPageSize, submit]
   )
 
   // Pass current progress through unfrozen — streaming update throttling

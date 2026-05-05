@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# pre-push — fork safety hook.
+#
+# Responsibilities:
+#   1. HARD BLOCK any push whose remote resolves to a NousResearch upstream URL.
+#      Upstream contributions go through docs/upstream-contribution-queue.md,
+#      not `git push`.
+#   2. WARN (non-blocking) when commits being pushed lack HERMES_CHANGELOG
+#      entries — points the user at scripts/check_changelog.sh and
+#      docs/changelog-discipline.md.
+#
+# Installed by scripts/install-git-hooks.sh.
+#
+# stdin receives lines: <local_ref> <local_sha> <remote_ref> <remote_sha>
+# $1 = remote name, $2 = remote URL.
+
+set -euo pipefail
+
+REMOTE_NAME="${1:-}"
+REMOTE_URL="${2:-}"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+# ----- 1. Hard block upstream pushes -----
+if [[ "$REMOTE_NAME" == "upstream" ]] \
+   || [[ "$REMOTE_URL" == *NousResearch/hermes-agent* ]] \
+   || [[ "$REMOTE_URL" == "DISABLED" ]]; then
+  cat >&2 <<EOF
+BLOCKED: refusing to push to upstream remote.
+
+  remote name: $REMOTE_NAME
+  remote url:  $REMOTE_URL
+
+Upstream contributions go through docs/upstream-contribution-queue.md:
+  1. Cherry-pick to a clean branch off upstream/main.
+  2. Open a PR against NousResearch/hermes-agent via gh/web UI.
+
+If you are intentionally preparing an upstream contribution branch and know
+what you are doing, override with: HERMES_ALLOW_UPSTREAM_PUSH=1
+EOF
+  if [[ "${HERMES_ALLOW_UPSTREAM_PUSH:-0}" != "1" ]]; then
+    exit 1
+  fi
+  echo "HERMES_ALLOW_UPSTREAM_PUSH=1 — allowing upstream push." >&2
+fi
+
+# ----- 2. Warn on missing changelog entries -----
+# Only warn for pushes to origin/gitlab main branch (the operator review
+# surfaces). For PR branches we allow the entry to land with the PR itself.
+ZERO="0000000000000000000000000000000000000000"
+while read -r LOCAL_REF LOCAL_SHA REMOTE_REF REMOTE_SHA; do
+  [[ "$LOCAL_SHA" == "$ZERO" ]] && continue  # delete
+  case "$REMOTE_REF" in
+    refs/heads/main|refs/heads/master) ;;
+    *) continue ;;
+  esac
+
+  if [[ "$REMOTE_SHA" == "$ZERO" ]]; then
+    # New branch on remote — compare against upstream/main if available.
+    BASE="$(git -C "$REPO_ROOT" merge-base "$LOCAL_SHA" upstream/main 2>/dev/null || echo "")"
+    [[ -z "$BASE" ]] && continue
+    RANGE="$BASE..$LOCAL_SHA"
+  else
+    RANGE="$REMOTE_SHA..$LOCAL_SHA"
+  fi
+
+  if [[ -x "$REPO_ROOT/scripts/check_changelog.sh" ]]; then
+    if ! "$REPO_ROOT/scripts/check_changelog.sh" "$RANGE" >/dev/null 2>&1; then
+      echo "" >&2
+      echo "WARNING: HERMES_CHANGELOG.md may be missing entries for this push." >&2
+      echo "Run: scripts/check_changelog.sh $RANGE" >&2
+      echo "See docs/changelog-discipline.md. Push continues." >&2
+      echo "" >&2
+    fi
+  fi
+done
+
+exit 0

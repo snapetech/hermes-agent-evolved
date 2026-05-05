@@ -83,7 +83,6 @@ declare module '@hermes/ink' {
     readonly getScrollTop: () => number
     readonly getPendingDelta: () => number
     readonly getScrollHeight: () => number
-    readonly getFreshScrollHeight: () => number
     readonly getViewportHeight: () => number
     readonly getViewportTop: () => number
     readonly getLastManualScrollAt: () => number

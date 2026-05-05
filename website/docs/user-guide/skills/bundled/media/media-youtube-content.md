@@ -1,14 +1,14 @@
 ---
-title: "Youtube Content — YouTube transcripts to summaries, threads, blogs"
+title: "Youtube Content"
 sidebar_label: "Youtube Content"
-description: "YouTube transcripts to summaries, threads, blogs"
+description: "Fetch YouTube video transcripts and transform them into structured content (chapters, summaries, threads, blog posts)"
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
 # Youtube Content
 
-YouTube transcripts to summaries, threads, blogs.
+Fetch YouTube video transcripts and transform them into structured content (chapters, summaries, threads, blog posts). Use when the user shares a YouTube URL or video link, asks to summarize a video, requests a transcript, or wants to extract and reformat content from any YouTube video.
 
 ## Skill metadata
 
@@ -24,10 +24,6 @@ The following is the complete skill definition that Hermes loads when this skill
 :::
 
 # YouTube Content Tool
-
-## When to use
-
-Use when the user shares a YouTube URL or video link, asks to summarize a video, requests a transcript, or wants to extract and reformat content from any YouTube video. Transforms transcripts into structured content (chapters, summaries, threads, blog posts).
 
 Extract transcripts from YouTube videos and convert them into useful formats.
 

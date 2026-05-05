@@ -5,7 +5,7 @@ token validation/exchange for the Copilot API.
 
 Token type support (per GitHub docs):
   gho_          OAuth token           ✓  (default via copilot login)
-  github_pat_   Fine-grained PAT      ✓  (needs Copilot Requests permission)
+  github_pat_   Fine-grained PAT      ✗  rejected by the Copilot API endpoint
   ghu_          GitHub App token      ✓  (via environment variable)
   ghp_          Classic PAT           ✗  NOT SUPPORTED
 
@@ -33,7 +33,8 @@ logger = logging.getLogger(__name__)
 COPILOT_OAUTH_CLIENT_ID = "Ov23li8tweQw6odWQebz"
 # Token type prefixes
 _CLASSIC_PAT_PREFIX = "ghp_"
-_SUPPORTED_PREFIXES = ("gho_", "github_pat_", "ghu_")
+_FINE_GRAINED_PAT_PREFIX = "github_pat_"
+_SUPPORTED_PREFIXES = ("gho_", "ghu_")
 
 # Env var search order (matches Copilot CLI)
 COPILOT_ENV_VARS = ("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN")
@@ -57,8 +58,23 @@ def validate_copilot_token(token: str) -> tuple[bool, str]:
             "Classic Personal Access Tokens (ghp_*) are not supported by the "
             "Copilot API. Use one of:\n"
             "  → `copilot login` or `hermes model` to authenticate via OAuth\n"
-            "  → A fine-grained PAT (github_pat_*) with Copilot Requests permission\n"
             "  → `gh auth login` with the default device code flow (produces gho_* tokens)"
+        )
+
+    if token.startswith(_FINE_GRAINED_PAT_PREFIX):
+        return False, (
+            "Fine-grained Personal Access Tokens (github_pat_*) are not supported "
+            "by the Copilot API endpoint used by Hermes. Use `copilot login`, "
+            "`hermes model`, or `gh auth login` with the device code flow to "
+            "provide an OAuth token (gho_*)."
+        )
+
+    if not token.startswith(_SUPPORTED_PREFIXES):
+        supported = ", ".join(f"{prefix}*" for prefix in _SUPPORTED_PREFIXES)
+        return False, (
+            "Unsupported Copilot token type. Expected one of: "
+            f"{supported}. Use `copilot login`, `hermes model`, or a "
+            "fine-grained PAT with Copilot Requests permission."
         )
 
     return True, "OK"

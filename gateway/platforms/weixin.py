@@ -92,18 +92,6 @@ SESSION_EXPIRED_ERRCODE = -14
 RATE_LIMIT_ERRCODE = -2  # iLink frequency limit — backoff and retry
 MESSAGE_DEDUP_TTL_SECONDS = 300
 
-
-def _is_stale_session_ret(
-    ret: "Optional[int]", errcode: "Optional[int]", errmsg: "Optional[str]",
-) -> bool:
-    """True when iLink returns ret=-2 / errcode=-2 with 'unknown error',
-    which is a stale-session signal (same as errcode=-14) rather than
-    a genuine rate limit."""
-    if ret != RATE_LIMIT_ERRCODE and errcode != RATE_LIMIT_ERRCODE:
-        return False
-    return (errmsg or "").lower() == "unknown error"
-
-
 MEDIA_IMAGE = 1
 MEDIA_VIDEO = 2
 MEDIA_FILE = 3
@@ -1222,17 +1210,6 @@ class WeixinAdapter(BasePlatformAdapter):
         self._mark_connected()
         _LIVE_ADAPTERS[self._token] = self
         logger.info("[%s] Connected account=%s base=%s", self.name, _safe_id(self._account_id), self._base_url)
-        if self._group_policy != "disabled":
-            logger.warning(
-                "[%s] WEIXIN_GROUP_POLICY=%s is set, but QR-login connects an iLink bot "
-                "identity (e.g. ...@im.bot) which typically cannot be invited into ordinary "
-                "WeChat groups. iLink usually does not deliver ordinary-group events for "
-                "these accounts, so group messages may never reach Hermes regardless of this "
-                "policy. If group delivery doesn't work, the limitation is on the iLink side, "
-                "not in Hermes.",
-                self.name,
-                self._group_policy,
-            )
         return True
 
     async def disconnect(self) -> None:
@@ -1277,8 +1254,7 @@ class WeixinAdapter(BasePlatformAdapter):
                 ret = response.get("ret", 0)
                 errcode = response.get("errcode", 0)
                 if ret not in (0, None) or errcode not in (0, None):
-                    if (ret == SESSION_EXPIRED_ERRCODE or errcode == SESSION_EXPIRED_ERRCODE
-                            or _is_stale_session_ret(ret, errcode, response.get("errmsg"))):
+                    if ret == SESSION_EXPIRED_ERRCODE or errcode == SESSION_EXPIRED_ERRCODE:
                         logger.error("[%s] Session expired; pausing for 10 minutes", self.name)
                         await asyncio.sleep(600)
                         consecutive_failures = 0
@@ -1333,15 +1309,6 @@ class WeixinAdapter(BasePlatformAdapter):
         if message_id and self._dedup.is_duplicate(message_id):
             return
 
-        # Secondary content-fingerprint dedup for text messages
-        item_list = message.get("item_list") or []
-        text = _extract_text(item_list)
-        if text:
-            content_key = f"content:{sender_id}:{hashlib.md5(text.encode()).hexdigest()}"
-            if self._dedup.is_duplicate(content_key):
-                logger.debug("[%s] Content-dedup: skipping duplicate message from %s", self.name, sender_id)
-                return
-
         chat_type, effective_chat_id = _guess_chat_type(message, self._account_id)
         if chat_type == "group":
             if self._group_policy == "disabled":
@@ -1356,6 +1323,8 @@ class WeixinAdapter(BasePlatformAdapter):
             self._token_store.set(self._account_id, sender_id, context_token)
         asyncio.create_task(self._maybe_fetch_typing_ticket(sender_id, context_token or None))
 
+        item_list = message.get("item_list") or []
+        text = _extract_text(item_list)
         media_paths: List[str] = []
         media_types: List[str] = []
 
@@ -1550,7 +1519,6 @@ class WeixinAdapter(BasePlatformAdapter):
                         is_session_expired = (
                             ret == SESSION_EXPIRED_ERRCODE
                             or errcode == SESSION_EXPIRED_ERRCODE
-                            or _is_stale_session_ret(ret, errcode, resp.get("errmsg"))
                         )
                         # Session expired — strip token and retry once
                         if is_session_expired and not retried_without_token and context_token:
@@ -1627,7 +1595,7 @@ class WeixinAdapter(BasePlatformAdapter):
         _, image_cleaned = self.extract_images(cleaned_content)
         local_files, final_content = self.extract_local_files(image_cleaned)
 
-        _AUDIO_EXTS = {".ogg", ".opus", ".mp3", ".wav", ".m4a", ".flac"}
+        _AUDIO_EXTS = {".ogg", ".opus", ".mp3", ".wav", ".m4a"}
         _VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".3gp"}
         _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 
@@ -2037,9 +2005,7 @@ async def send_weixin_direct(
 
     live_adapter = _LIVE_ADAPTERS.get(resolved_token)
     send_session = getattr(live_adapter, '_send_session', None)
-    if (live_adapter is not None and send_session is not None
-            and not send_session.closed
-            and send_session._loop is asyncio.get_running_loop()):
+    if live_adapter is not None and send_session is not None and not send_session.closed:
         last_result: Optional[SendResult] = None
         cleaned = live_adapter.format_message(message)
         if cleaned:

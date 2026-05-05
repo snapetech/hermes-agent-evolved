@@ -209,13 +209,10 @@ def sync_skills(quiet: bool = False) -> dict:
                 if dest.exists():
                     # User already has a skill with the same name — don't overwrite.
                     # Only baseline in the manifest when the on-disk copy is
-                    # byte-identical to bundled (e.g. a reset that re-syncs, or
-                    # a coincidentally identical install); that case is harmless
-                    # to track. If the copy differs (custom skill, hub-installed,
-                    # or user-edited) skip the manifest write: recording
-                    # bundled_hash there would poison update detection by making
-                    # user_hash != origin_hash read as "user-modified" on every
-                    # subsequent sync, permanently blocking bundled updates.
+                    # byte-identical to bundled. If the copy differs (custom
+                    # skill, hub-installed, or user-edited) skip the manifest
+                    # write: recording bundled_hash there would poison update
+                    # detection and read as permanently "user-modified".
                     skipped += 1
                     if _dir_hash(dest) == bundled_hash:
                         manifest[skill_name] = bundled_hash
@@ -255,6 +252,14 @@ def sync_skills(quiet: bool = False) -> dict:
                 continue
 
             if user_hash != origin_hash:
+                if user_hash == bundled_hash:
+                    # The manifest baseline is stale, but the installed copy
+                    # already matches the current bundled version. Re-baseline
+                    # so future syncs do not keep flagging this as modified.
+                    manifest[skill_name] = bundled_hash
+                    skipped += 1
+                    continue
+
                 # User modified this skill — don't overwrite their changes
                 user_modified.append(skill_name)
                 if not quiet:

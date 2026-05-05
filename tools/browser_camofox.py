@@ -32,7 +32,7 @@ from typing import Any, Dict, Optional
 
 import requests
 
-from hermes_cli.config import cfg_get, load_config
+from hermes_cli.config import load_config
 from tools.browser_camofox_state import get_camofox_identity
 from tools.registry import tool_error
 
@@ -74,9 +74,16 @@ def check_camofox_available() -> bool:
         return False
     try:
         resp = requests.get(f"{url}/health", timeout=5)
-        if resp.status_code == 200 and not _vnc_url_checked:
+        if resp.status_code != 200:
+            return False
+        try:
+            data = resp.json()
+        except ValueError:
+            return False
+        if not isinstance(data, dict):
+            return False
+        if not _vnc_url_checked:
             try:
-                data = resp.json()
                 vnc_port = data.get("vncPort")
                 if isinstance(vnc_port, int) and 1 <= vnc_port <= 65535:
                     from urllib.parse import urlparse
@@ -86,7 +93,7 @@ def check_camofox_available() -> bool:
             except (ValueError, KeyError):
                 pass
             _vnc_url_checked = True
-        return resp.status_code == 200
+        return True
     except Exception:
         return False
 
@@ -169,7 +176,12 @@ def _ensure_tab(task_id: Optional[str], url: str = "about:blank") -> Dict[str, A
         timeout=_DEFAULT_TIMEOUT,
     )
     resp.raise_for_status()
-    data = resp.json()
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        raise requests.ConnectionError(
+            f"Invalid JSON response from Camofox at {base}/tabs"
+        ) from exc
     session["tab_id"] = data.get("tabId")
     return session
 
@@ -206,7 +218,12 @@ def _post(path: str, body: dict, timeout: int = _DEFAULT_TIMEOUT) -> dict:
     url = f"{get_camofox_url()}{path}"
     resp = requests.post(url, json=body, timeout=timeout)
     resp.raise_for_status()
-    return resp.json()
+    try:
+        return resp.json()
+    except ValueError as exc:
+        raise requests.ConnectionError(
+            f"Invalid JSON response from Camofox at {url}"
+        ) from exc
 
 
 def _get(path: str, params: dict = None, timeout: int = _DEFAULT_TIMEOUT) -> dict:
@@ -543,8 +560,9 @@ def camofox_vision(question: str, annotate: bool = False,
         )
 
         try:
+            from hermes_cli.config import load_config
             _cfg = load_config()
-            _vision_cfg = cfg_get(_cfg, "auxiliary", "vision", default={})
+            _vision_cfg = _cfg.get("auxiliary", {}).get("vision", {})
             _vision_timeout = float(_vision_cfg.get("timeout", 120))
             _vision_temperature = float(_vision_cfg.get("temperature", 0.1))
         except Exception:
@@ -598,6 +616,3 @@ def camofox_console(clear: bool = False, task_id: Optional[str] = None) -> str:
         "note": "Console log capture is not available with the Camofox backend. "
                 "Use browser_snapshot or browser_vision to inspect page state.",
     })
-
-
-

@@ -293,7 +293,6 @@ Filesystems must be attached at instance launch time:
 
 ### Best practices
 
-<!-- ascii-guard-ignore -->
 ```bash
 # Store on filesystem (persists)
 /lambda/nfs/storage/
@@ -306,7 +305,6 @@ Filesystems must be attached at instance launch time:
 /home/ubuntu/
   └── working/  # Temporary files
 ```
-<!-- ascii-guard-ignore-end -->
 
 ## SSH configuration
 

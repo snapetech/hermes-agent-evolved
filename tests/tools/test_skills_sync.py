@@ -1,5 +1,4 @@
 """Tests for tools/skills_sync.py — manifest-based skill seeding and updating."""
-
 from pathlib import Path
 from unittest.mock import patch
 
@@ -300,6 +299,27 @@ class TestSyncSkills:
         assert "old-skill" not in result.get("updated", [])
         assert (user_skill / "SKILL.md").read_text() == "# My custom version"
 
+    def test_stale_manifest_rebaselines_when_user_copy_matches_bundled(self, tmp_path):
+        """A stale origin hash should auto-heal when the installed copy already matches bundled."""
+        bundled = self._setup_bundled(tmp_path)
+        skills_dir = tmp_path / "user_skills"
+        manifest_file = skills_dir / ".bundled_manifest"
+
+        user_skill = skills_dir / "old-skill"
+        user_skill.mkdir(parents=True)
+        (user_skill / "SKILL.md").write_text("# Old")
+        manifest_file.write_text("old-skill:STALEHASH000000000000000000000000\n")
+
+        with self._patches(bundled, skills_dir, manifest_file):
+            result = sync_skills(quiet=True)
+            manifest = _read_manifest()
+
+        expected_hash = _dir_hash(bundled / "old-skill")
+        assert "old-skill" not in result["user_modified"]
+        assert "old-skill" not in result.get("updated", [])
+        assert result["skipped"] >= 1
+        assert manifest["old-skill"] == expected_hash
+
     def test_unchanged_skill_not_updated(self, tmp_path):
         """Skill in sync (user == bundled == origin) = no action needed."""
         bundled = self._setup_bundled(tmp_path)
@@ -401,6 +421,71 @@ class TestSyncSkills:
             result = sync_skills(quiet=True)
 
         assert (user_skill / "SKILL.md").read_text() == "# User modified"
+        manifest = _read_manifest()
+        assert "new-skill" not in manifest
+        assert "new-skill" not in result["user_modified"]
+
+    def test_collision_with_identical_existing_skill_rebaselines_manifest(self, tmp_path):
+        bundled = self._setup_bundled(tmp_path)
+        skills_dir = tmp_path / "user_skills"
+        manifest_file = skills_dir / ".bundled_manifest"
+
+        user_skill = skills_dir / "category" / "new-skill"
+        user_skill.mkdir(parents=True)
+        (user_skill / "SKILL.md").write_text("# New")
+        (user_skill / "main.py").write_text("print(1)")
+
+        with self._patches(bundled, skills_dir, manifest_file):
+            sync_skills(quiet=True)
+            manifest = _read_manifest()
+
+        assert manifest["new-skill"] == _dir_hash(bundled / "category" / "new-skill")
+
+    def test_collision_does_not_poison_manifest(self, tmp_path):
+        bundled = self._setup_bundled(tmp_path)
+        skills_dir = tmp_path / "user_skills"
+        manifest_file = skills_dir / ".bundled_manifest"
+
+        user_skill = skills_dir / "category" / "new-skill"
+        user_skill.mkdir(parents=True)
+        (user_skill / "SKILL.md").write_text("# From hub — unrelated to bundled")
+
+        with self._patches(bundled, skills_dir, manifest_file):
+            sync_skills(quiet=True)
+            manifest = _read_manifest()
+
+        assert "new-skill" not in manifest
+
+    def test_collision_does_not_trigger_false_user_modified_on_resync(self, tmp_path):
+        bundled = self._setup_bundled(tmp_path)
+        skills_dir = tmp_path / "user_skills"
+        manifest_file = skills_dir / ".bundled_manifest"
+
+        user_skill = skills_dir / "category" / "new-skill"
+        user_skill.mkdir(parents=True)
+        (user_skill / "SKILL.md").write_text("# From hub — unrelated to bundled")
+
+        with self._patches(bundled, skills_dir, manifest_file):
+            sync_skills(quiet=True)
+            result2 = sync_skills(quiet=True)
+
+        assert "new-skill" not in result2["user_modified"]
+
+    def test_collision_prints_reset_hint_when_local_skill_differs(self, tmp_path, capsys):
+        bundled = self._setup_bundled(tmp_path)
+        skills_dir = tmp_path / "user_skills"
+        manifest_file = skills_dir / ".bundled_manifest"
+
+        user_skill = skills_dir / "category" / "new-skill"
+        user_skill.mkdir(parents=True)
+        (user_skill / "SKILL.md").write_text("# User modified")
+
+        with self._patches(bundled, skills_dir, manifest_file):
+            sync_skills(quiet=False)
+
+        captured = capsys.readouterr().out
+        assert "new-skill" in captured
+        assert "hermes skills reset new-skill" in captured
 
     def test_collision_does_not_poison_manifest(self, tmp_path):
         """Collision with an unmanifested user skill must NOT record bundled_hash.
@@ -625,7 +710,7 @@ class TestResetBundledSkill:
         return stack
 
     def test_reset_clears_stuck_user_modified_flag(self, tmp_path):
-        """The core bug repro: copy-pasted bundled restore doesn't un-stick the flag; reset does."""
+        """Reset remains safe even when sync now auto-heals a stale manifest baseline."""
         bundled = self._setup_bundled(tmp_path)
         skills_dir = tmp_path / "user_skills"
         manifest_file = skills_dir / ".bundled_manifest"
@@ -641,9 +726,10 @@ class TestResetBundledSkill:
         manifest_file.write_text("google-workspace:STALEHASH000000000000000000000000\n")
 
         with self._patches(bundled, skills_dir, manifest_file):
-            # Sanity check: without reset, sync would flag it user_modified
+            # Sync should now auto-heal the stale baseline instead of wedging
+            # the skill in user_modified forever.
             pre = sync_skills(quiet=True)
-            assert "google-workspace" in pre["user_modified"]
+            assert "google-workspace" not in pre["user_modified"]
 
             # Reset (no --restore) should clear the manifest entry and re-baseline
             result = reset_bundled_skill("google-workspace", restore=False)

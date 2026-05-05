@@ -1,14 +1,14 @@
 ---
-title: "Native Mcp — MCP client: connect servers, register tools (stdio/HTTP)"
+title: "Native Mcp"
 sidebar_label: "Native Mcp"
-description: "MCP client: connect servers, register tools (stdio/HTTP)"
+description: "Built-in MCP (Model Context Protocol) client that connects to external MCP servers, discovers their tools, and registers them as native Hermes Agent tools"
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
 # Native Mcp
 
-MCP client: connect servers, register tools (stdio/HTTP).
+Built-in MCP (Model Context Protocol) client that connects to external MCP servers, discovers their tools, and registers them as native Hermes Agent tools. Supports stdio and HTTP transports with automatic reconnection, security filtering, and zero-config tool injection.
 
 ## Skill metadata
 
@@ -293,7 +293,7 @@ mcp_servers:
     command: "npx"
     args: ["-y", "@modelcontextprotocol/server-github"]
     env:
-      GITHUB_PERSONAL_ACCESS_TOKEN: "ghp_xxxxxxxxxxxxxxxxxxxx"
+      GITHUB_PERSONAL_ACCESS_TOKEN: "GITHUB_TOKEN_PLACEHOLDER"
     timeout: 60
 ```
 
@@ -328,7 +328,7 @@ mcp_servers:
     command: "npx"
     args: ["-y", "@modelcontextprotocol/server-github"]
     env:
-      GITHUB_PERSONAL_ACCESS_TOKEN: "ghp_xxxxxxxxxxxxxxxxxxxx"
+      GITHUB_PERSONAL_ACCESS_TOKEN: "GITHUB_TOKEN_PLACEHOLDER"
 
   company_api:
     url: "https://mcp.internal.company.com/mcp"

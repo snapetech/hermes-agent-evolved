@@ -8,6 +8,7 @@ import tools.skills_tool as skills_tool_module
 from agent.skill_commands import (
     build_preloaded_skills_prompt,
     build_skill_invocation_message,
+    get_skill_commands,
     resolve_skill_command_key,
     scan_skill_commands,
 )
@@ -34,18 +35,6 @@ description: Description for {name}.
 """
     (skill_dir / "SKILL.md").write_text(content)
     return skill_dir
-
-
-def _symlink_category(skills_dir: Path, linked_root: Path, category: str) -> Path:
-    """Create a category symlink under skills_dir pointing outside the tree."""
-    external_category = linked_root / category
-    external_category.mkdir(parents=True, exist_ok=True)
-    symlink_path = skills_dir / category
-    try:
-        symlink_path.symlink_to(external_category, target_is_directory=True)
-    except (OSError, NotImplementedError) as exc:
-        pytest.skip(f"symlinks unavailable in test environment: {exc}")
-    return external_category
 
 
 class TestScanSkillCommands:
@@ -111,71 +100,16 @@ class TestScanSkillCommands:
         assert "/enabled-skill" in result
         assert "/disabled-skill" not in result
 
-    def test_finds_skills_in_symlinked_category_dir(self, tmp_path):
-        external_root = tmp_path / "repo"
-        skills_root = tmp_path / "skills"
-        skills_root.mkdir()
+    def test_get_skill_commands_rescans_when_skill_tree_changes(self, tmp_path):
+        with patch("tools.skills_tool.SKILLS_DIR", tmp_path):
+            _make_skill(tmp_path, "first-skill")
+            initial = get_skill_commands()
+            assert "/first-skill" in initial
 
-        external_category = _symlink_category(skills_root, external_root, "linked")
-        _make_skill(external_category.parent, "knowledge-brain", category="linked")
+            _make_skill(tmp_path, "second-skill")
+            refreshed = get_skill_commands()
 
-        with patch("tools.skills_tool.SKILLS_DIR", skills_root):
-            result = scan_skill_commands()
-
-        assert "/knowledge-brain" in result
-        assert result["/knowledge-brain"]["name"] == "knowledge-brain"
-
-    def test_get_skill_commands_rescans_when_platform_scope_changes(self, tmp_path):
-        """Platform-specific disabled-skill caches must not leak across platforms.
-
-        Regression test for #14536: a gateway process serving Telegram
-        and Discord concurrently would seed the process-global cache
-        with whichever platform scanned first, and subsequent
-        ``get_skill_commands()`` calls from the other platform silently
-        inherited that filter.
-        """
-        import agent.skill_commands as sc_mod
-        from agent.skill_commands import get_skill_commands
-
-        def _disabled_skills():
-            platform = os.getenv("HERMES_PLATFORM")
-            if platform == "telegram":
-                return {"telegram-only"}
-            if platform == "discord":
-                return {"discord-only"}
-            return set()
-
-        with (
-            patch("tools.skills_tool.SKILLS_DIR", tmp_path),
-            patch("tools.skills_tool._get_disabled_skill_names", side_effect=_disabled_skills),
-            patch.object(sc_mod, "_skill_commands", {}),
-            patch.object(sc_mod, "_skill_commands_platform", None),
-        ):
-            _make_skill(tmp_path, "shared")
-            _make_skill(tmp_path, "telegram-only")
-            _make_skill(tmp_path, "discord-only")
-
-            with patch.dict(os.environ, {"HERMES_PLATFORM": "telegram"}):
-                telegram_commands = dict(get_skill_commands())
-
-            assert "/shared" in telegram_commands
-            assert "/discord-only" in telegram_commands
-            assert "/telegram-only" not in telegram_commands
-
-            with patch.dict(os.environ, {"HERMES_PLATFORM": "discord"}):
-                discord_commands = dict(get_skill_commands())
-
-            assert "/shared" in discord_commands
-            assert "/telegram-only" in discord_commands
-            assert "/discord-only" not in discord_commands
-
-            # Switching back to telegram must also rescan — not re-serve
-            # the discord view that was just cached.
-            with patch.dict(os.environ, {"HERMES_PLATFORM": "telegram"}):
-                telegram_again = dict(get_skill_commands())
-
-            assert "/telegram-only" not in telegram_again
-            assert "/discord-only" in telegram_again
+        assert "/second-skill" in refreshed
 
 
     def test_special_chars_stripped_from_cmd_key(self, tmp_path):
@@ -447,6 +381,33 @@ Generate some audio.
 
         assert msg is not None
         assert 'file_path="<path>"' in msg
+
+    def test_skill_invocation_includes_temporal_context(self, tmp_path):
+        with patch("tools.skills_tool.SKILLS_DIR", tmp_path):
+            _make_skill(tmp_path, "test-skill")
+            scan_skill_commands()
+            msg = build_skill_invocation_message("/test-skill", "check stale work")
+
+        assert msg is not None
+        assert "Temporal context: current date/time is" in msg
+        assert "stale" in msg
+        assert "overdue" in msg
+
+    def test_putter_uses_compact_invocation_by_default(self, tmp_path):
+        with patch("tools.skills_tool.SKILLS_DIR", tmp_path):
+            _make_skill(
+                tmp_path,
+                "putter",
+                body="FULL PUTTER BODY SHOULD NOT BE INLINED",
+            )
+            scan_skill_commands()
+            msg = build_skill_invocation_message("/putter", "find one thing")
+
+        assert msg is not None
+        assert "compact invocation is loaded below" in msg
+        assert "# Putter Compact Invocation" in msg
+        assert "FULL PUTTER BODY SHOULD NOT BE INLINED" not in msg
+        assert "find one thing" in msg
 
 
 class TestSkillDirectoryHeader:

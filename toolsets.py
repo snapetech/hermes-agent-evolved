@@ -32,7 +32,7 @@ _HERMES_CORE_TOOLS = [
     # Web
     "web_search", "web_extract",
     # Terminal + process management
-    "terminal", "process",
+    "terminal", "process", "runtime_installs", "maintenance_freshness",
     # File manipulation
     "read_file", "write_file", "patch", "search_files",
     # Vision + image generation
@@ -49,22 +49,21 @@ _HERMES_CORE_TOOLS = [
     # Planning & memory
     "todo", "memory",
     # Session history search
-    "session_search",
+    "session_search", "compaction_search", "compaction_expand",
     # Clarifying questions
     "clarify",
     # Code execution + delegation
     "execute_code", "delegate_task",
     # Cronjob management
     "cronjob",
+    # Stack inventory and CVE auditing
+    "stack_audit",
+    # SIEM review and event retrieval
+    "siem_query",
     # Cross-platform messaging (gated on gateway running via check_fn)
-    "send_message",
+    "send_message", "discord_channel_history",
     # Home Assistant smart home control (gated on HASS_TOKEN via check_fn)
     "ha_list_entities", "ha_get_state", "ha_list_services", "ha_call_service",
-    # Kanban multi-agent coordination — only in schema when the agent is
-    # spawned as a kanban worker (HERMES_KANBAN_TASK env set), otherwise
-    # zero schema footprint. Gated via check_fn in tools/kanban_tools.py.
-    "kanban_show", "kanban_complete", "kanban_block", "kanban_heartbeat",
-    "kanban_comment", "kanban_create", "kanban_link",
 ]
 
 
@@ -87,12 +86,6 @@ TOOLSETS = {
     "vision": {
         "description": "Image analysis and vision tools",
         "tools": ["vision_analyze"],
-        "includes": []
-    },
-
-    "video": {
-        "description": "Video analysis and understanding tools (opt-in, not in default toolset)",
-        "tools": ["video_analyze"],
         "includes": []
     },
     
@@ -135,6 +128,18 @@ TOOLSETS = {
     "cronjob": {
         "description": "Cronjob management tool - create, list, update, pause, resume, remove, and trigger scheduled tasks",
         "tools": ["cronjob"],
+        "includes": []
+    },
+
+    "stack_audit": {
+        "description": "Maintain Hermes stack inventory and run conservative CVE/audit checks",
+        "tools": ["stack_audit"],
+        "includes": []
+    },
+
+    "siem": {
+        "description": "Read-only SIEM health, index, alert, and event retrieval",
+        "tools": ["siem_query"],
         "includes": []
     },
     
@@ -185,6 +190,12 @@ TOOLSETS = {
         "tools": ["session_search"],
         "includes": []
     },
+
+    "compaction": {
+        "description": "Search and expand exact archived spans from current-session context compaction",
+        "tools": ["compaction_search", "compaction_expand"],
+        "includes": []
+    },
     
     "clarify": {
         "description": "Ask the user clarifying questions (multiple-choice or open-ended)",
@@ -211,24 +222,6 @@ TOOLSETS = {
         "description": "Home Assistant smart home control and monitoring",
         "tools": ["ha_list_entities", "ha_get_state", "ha_list_services", "ha_call_service"],
         "includes": []
-    },
-
-    "kanban": {
-        "description": (
-            "Kanban multi-agent coordination — only active when the agent "
-            "is spawned by the kanban dispatcher (HERMES_KANBAN_TASK env "
-            "set). The dispatcher runs inside the gateway by default; see "
-            "`kanban.dispatch_in_gateway` in config.yaml. Lets workers mark "
-            "tasks done with structured handoffs, block for human input, "
-            "heartbeat during long ops, comment on threads, and (for "
-            "orchestrators) fan out into child tasks."
-        ),
-        "tools": [
-            "kanban_show", "kanban_complete", "kanban_block",
-            "kanban_heartbeat", "kanban_comment",
-            "kanban_create", "kanban_link",
-        ],
-        "includes": [],
     },
 
     "discord": {
@@ -305,7 +298,7 @@ TOOLSETS = {
         "description": "Editor integration (VS Code, Zed, JetBrains) — coding-focused tools without messaging, audio, or clarify UI",
         "tools": [
             "web_search", "web_extract",
-            "terminal", "process",
+            "terminal", "process", "runtime_installs", "maintenance_freshness",
             "read_file", "write_file", "patch", "search_files",
             "vision_analyze",
             "skills_list", "skill_view", "skill_manage",
@@ -326,7 +319,7 @@ TOOLSETS = {
             # Web
             "web_search", "web_extract",
             # Terminal + process management
-            "terminal", "process",
+            "terminal", "process", "runtime_installs", "maintenance_freshness",
             # File manipulation
             "read_file", "write_file", "patch", "search_files",
             # Vision + image generation
@@ -593,27 +586,6 @@ def resolve_toolset(name: str, visited: Set[str] = None) -> List[str]:
     # Get toolset definition
     toolset = get_toolset(name)
     if not toolset:
-        # Auto-generate a toolset for plugin platforms (hermes-<name>).
-        # Gives them _HERMES_CORE_TOOLS plus any tools the plugin registered
-        # into a toolset matching the platform name.
-        if name.startswith("hermes-"):
-            platform_name = name[len("hermes-"):]
-            try:
-                from gateway.platform_registry import platform_registry
-                if platform_registry.is_registered(platform_name):
-                    plugin_tools = set(_HERMES_CORE_TOOLS)
-                    try:
-                        from tools.registry import registry
-                        plugin_tools.update(
-                            e.name for e in registry._tools.values()
-                            if e.toolset == platform_name
-                        )
-                    except Exception:
-                        pass
-                    return list(plugin_tools)
-            except Exception:
-                pass
-
         return []
 
     # Collect direct tools

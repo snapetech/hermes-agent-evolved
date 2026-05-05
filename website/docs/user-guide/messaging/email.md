@@ -6,10 +6,10 @@ description: "Set up Hermes Agent as an email assistant via IMAP/SMTP"
 
 # Email Setup
 
-Hermes can receive and reply to emails using standard IMAP and SMTP protocols. Send an email to the agent's address and it replies in-thread — no special client or bot API needed. Works with Gmail, Outlook, Yahoo, Fastmail, or any provider that supports IMAP/SMTP.
+Hermes can receive and reply to emails using standard IMAP and SMTP protocols. Send an email to the agent's address and it replies in-thread — no special client or bot API needed. Works with Proton Mail Bridge, Outlook, Yahoo, Fastmail, Gmail, or any provider that exposes IMAP/SMTP to the gateway.
 
-:::info No External Dependencies
-The Email adapter uses Python's built-in `imaplib`, `smtplib`, and `email` modules. No additional packages or external services are required.
+:::info Adapter Dependencies
+The Email adapter uses Python's built-in `imaplib`, `smtplib`, and `email` modules. Providers that do not expose public IMAP, including Proton Mail, require their own bridge service to be reachable from Hermes.
 :::
 
 ---
@@ -17,8 +17,15 @@ The Email adapter uses Python's built-in `imaplib`, `smtplib`, and `email` modul
 ## Prerequisites
 
 - **A dedicated email account** for your Hermes agent (don't use your personal email)
-- **IMAP enabled** on the email account
-- **An app password** if using Gmail or another provider with 2FA
+- **IMAP enabled** on the email account, or a reachable Proton Mail Bridge listener
+- **An app password, Bridge password, or SMTP token** depending on the provider
+
+### Proton Mail
+
+1. Run Proton Mail Bridge where the Hermes gateway can reach it
+2. Use the Bridge IMAP listener for `EMAIL_IMAP_HOST`, `EMAIL_IMAP_PORT`, and `EMAIL_IMAP_SECURITY`
+3. Use `smtp.protonmail.ch` with a Proton SMTP token for outbound mail, or the Bridge SMTP listener if you expose that instead
+4. Confirm the Bridge listener is reachable from the gateway container or host before enabling the email platform
 
 ### Gmail Setup
 
@@ -59,19 +66,33 @@ Add to `~/.hermes/.env`:
 
 ```bash
 # Required
-EMAIL_ADDRESS=hermes@gmail.com
-EMAIL_PASSWORD=abcd efgh ijkl mnop    # App password (not your regular password)
-EMAIL_IMAP_HOST=imap.gmail.com
-EMAIL_SMTP_HOST=smtp.gmail.com
+EMAIL_ADDRESS=hermes@example.com
+EMAIL_PASSWORD=abcd efgh ijkl mnop    # App, Bridge, or provider password/token
+EMAIL_IMAP_HOST=imap.example.com
+EMAIL_SMTP_HOST=smtp.example.com
 
 # Security (recommended)
 EMAIL_ALLOWED_USERS=your@email.com,colleague@work.com
 
 # Optional
 EMAIL_IMAP_PORT=993                    # Default: 993 (IMAP SSL)
+EMAIL_IMAP_SECURITY=ssl                # ssl, starttls, or plain
 EMAIL_SMTP_PORT=587                    # Default: 587 (SMTP STARTTLS)
 EMAIL_POLL_INTERVAL=15                 # Seconds between inbox checks (default: 15)
 EMAIL_HOME_ADDRESS=your@email.com      # Default delivery target for cron jobs
+```
+
+For Proton Mail inbound, run Proton Mail Bridge and point IMAP at the Bridge
+listener instead of a public Proton host:
+
+```bash
+EMAIL_ADDRESS=hermes@example.com
+EMAIL_PASSWORD=<bridge-mailbox-password>
+EMAIL_IMAP_HOST=127.0.0.1
+EMAIL_IMAP_PORT=1143
+EMAIL_IMAP_SECURITY=starttls
+EMAIL_SMTP_HOST=smtp.protonmail.ch
+EMAIL_SMTP_PORT=587
 ```
 
 ---
@@ -151,10 +172,10 @@ Email access follows the same pattern as all other Hermes platforms:
 
 | Problem | Solution |
 |---------|----------|
-| **"IMAP connection failed"** at startup | Verify `EMAIL_IMAP_HOST` and `EMAIL_IMAP_PORT`. Ensure IMAP is enabled on the account. For Gmail, enable it in Settings → Forwarding and POP/IMAP. |
-| **"SMTP connection failed"** at startup | Verify `EMAIL_SMTP_HOST` and `EMAIL_SMTP_PORT`. Check that your password is correct (use App Password for Gmail). |
+| **"IMAP connection failed"** at startup | Verify `EMAIL_IMAP_HOST`, `EMAIL_IMAP_PORT`, and `EMAIL_IMAP_SECURITY`. For Proton Mail, verify the Bridge listener is reachable from the gateway process. |
+| **"SMTP connection failed"** at startup | Verify `EMAIL_SMTP_HOST` and `EMAIL_SMTP_PORT`. Check that your password, app password, or SMTP token is correct. |
 | **Messages not received** | Check `EMAIL_ALLOWED_USERS` includes the sender's email. Check spam folder — some providers flag automated replies. |
-| **"Authentication failed"** | For Gmail, you must use an App Password, not your regular password. Ensure 2FA is enabled first. |
+| **"Authentication failed"** | Use the credential type required by the provider. Proton Bridge mailbox passwords and Proton SMTP tokens are not always interchangeable. |
 | **Duplicate replies** | Ensure only one gateway instance is running. Check `hermes gateway status`. |
 | **Slow response** | The default poll interval is 15 seconds. Reduce with `EMAIL_POLL_INTERVAL=5` for faster response (but more IMAP connections). |
 | **Replies not threading** | The adapter uses In-Reply-To headers. Some email clients (especially web-based) may not thread correctly with automated messages. |
@@ -167,7 +188,7 @@ Email access follows the same pattern as all other Hermes platforms:
 **Use a dedicated email account.** Don't use your personal email — the agent stores the password in `.env` and has full inbox access via IMAP.
 :::
 
-- Use **App Passwords** instead of your main password (required for Gmail with 2FA)
+- Use provider-specific app passwords, Bridge passwords, or SMTP tokens instead of your main password
 - Set `EMAIL_ALLOWED_USERS` to restrict who can interact with the agent
 - The password is stored in `~/.hermes/.env` — protect this file (`chmod 600`)
 - IMAP uses SSL (port 993) and SMTP uses STARTTLS (port 587) by default — connections are encrypted
@@ -179,10 +200,11 @@ Email access follows the same pattern as all other Hermes platforms:
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `EMAIL_ADDRESS` | Yes | — | Agent's email address |
-| `EMAIL_PASSWORD` | Yes | — | Email password or app password |
-| `EMAIL_IMAP_HOST` | Yes | — | IMAP server host (e.g., `imap.gmail.com`) |
-| `EMAIL_SMTP_HOST` | Yes | — | SMTP server host (e.g., `smtp.gmail.com`) |
+| `EMAIL_PASSWORD` | Yes | — | Email password, Bridge password, app password, or SMTP token |
+| `EMAIL_IMAP_HOST` | Yes | — | IMAP server host or Proton Bridge listener |
+| `EMAIL_SMTP_HOST` | Yes | — | SMTP server host |
 | `EMAIL_IMAP_PORT` | No | `993` | IMAP server port |
+| `EMAIL_IMAP_SECURITY` | No | `ssl` | IMAP transport security: `ssl`, `starttls`, or `plain` |
 | `EMAIL_SMTP_PORT` | No | `587` | SMTP server port |
 | `EMAIL_POLL_INTERVAL` | No | `15` | Seconds between inbox checks |
 | `EMAIL_ALLOWED_USERS` | No | — | Comma-separated allowed sender addresses |

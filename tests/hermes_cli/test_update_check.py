@@ -26,7 +26,7 @@ def test_check_for_updates_uses_cache(tmp_path, monkeypatch):
     (repo_dir / ".git").mkdir()
 
     cache_file = tmp_path / ".update_check"
-    cache_file.write_text(json.dumps({"ts": time.time(), "behind": 3}))
+    cache_file.write_text(json.dumps({"version": 2, "ts": time.time(), "behind": 3}))
 
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     with patch("hermes_cli.banner.subprocess.run") as mock_run:
@@ -34,6 +34,29 @@ def test_check_for_updates_uses_cache(tmp_path, monkeypatch):
 
     assert result == 3
     mock_run.assert_not_called()
+
+
+def test_check_for_updates_ignores_legacy_cache(tmp_path, monkeypatch):
+    """Old cache entries lack a version and should not keep stale fork/upstream counts alive."""
+    from hermes_cli.banner import check_for_updates
+
+    repo_dir = tmp_path / "hermes-agent"
+    repo_dir.mkdir()
+    (repo_dir / ".git").mkdir()
+
+    cache_file = tmp_path / ".update_check"
+    cache_file.write_text(json.dumps({"ts": time.time(), "behind": 240}))
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    with patch("hermes_cli.banner.subprocess.run") as mock_run:
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout=""),
+            MagicMock(returncode=0, stdout="293\n"),
+        ]
+        result = check_for_updates()
+
+    assert result == 293
+    assert mock_run.call_count == 2
 
 
 def test_check_for_updates_expired_cache(tmp_path, monkeypatch):
@@ -46,7 +69,7 @@ def test_check_for_updates_expired_cache(tmp_path, monkeypatch):
 
     # Write an expired cache (timestamp far in the past)
     cache_file = tmp_path / ".update_check"
-    cache_file.write_text(json.dumps({"ts": 0, "behind": 1}))
+    cache_file.write_text(json.dumps({"version": 2, "ts": 0, "behind": 1}))
 
     mock_result = MagicMock(returncode=0, stdout="5\n")
 

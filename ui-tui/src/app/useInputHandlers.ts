@@ -21,8 +21,6 @@ import { patchTurnState } from './turnStore.js'
 import { getUiState } from './uiStore.js'
 
 const isCtrl = (key: { ctrl: boolean }, ch: string, target: string) => key.ctrl && ch.toLowerCase() === target
-const PRECISION_WHEEL_MIN_GAP_MS = 80
-const PRECISION_WHEEL_STICKY_MS = 80
 
 export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
   const { actions, composer, gateway, terminal, voice, wheelStep } = ctx
@@ -37,10 +35,6 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
   // direction flips reset. wheelStep (WHEEL_SCROLL_STEP) is the base; final
   // rows = wheelStep × accelMult. State mutates in place across renders.
   const wheelAccelRef = useRef(initWheelAccelForHost())
-
-  const precisionWheelRef = useRef<{ active: boolean; dir: 0 | -1 | 1; lastEventAtMs: number; lastScrollAtMs: number }>(
-    { active: false, dir: 0, lastEventAtMs: 0, lastScrollAtMs: 0 }
-  )
 
   useEffect(() => () => clearTimeout(scrollIdleTimer.current ?? undefined), [])
 
@@ -290,43 +284,8 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
 
     if (key.wheelUp || key.wheelDown) {
       const dir: -1 | 1 = key.wheelUp ? -1 : 1
-      const now = Date.now()
-      // Modifier-held wheel = precision mode: at most one wheelStep per short
-      // interval. Smooth mice / trackpads emit many raw wheel events for one
-      // intended line step, so raw 1:1 still moves too far.
-      // SGR/X10 mouse encoding only carries shift/meta/ctrl bits; Cmd on
-      // macOS is intercepted by the terminal, so we honor Option (meta) on
-      // Mac / Alt (meta) on Win+Linux / Ctrl as a portable fallback. Shift
-      // is reserved for selection extension.
-      const hasModifier = key.meta || key.ctrl
-      const precision = precisionWheelRef.current
-      // Keep precision active through the current wheel burst after the
-      // modifier is released. Otherwise a stream of queued/momentum wheel
-      // events can hand off mid-burst into the accelerated path and jump.
-      const precisionSticky = now - precision.lastEventAtMs < PRECISION_WHEEL_STICKY_MS
-
-      if (hasModifier || precisionSticky) {
-        if (!precision.active) {
-          precision.active = true
-          wheelAccelRef.current = initWheelAccelForHost()
-        }
-
-        precision.lastEventAtMs = now
-
-        if (dir === precision.dir && now - precision.lastScrollAtMs < PRECISION_WHEEL_MIN_GAP_MS) {
-          return
-        }
-
-        precision.lastScrollAtMs = now
-        precision.dir = dir
-
-        return scrollTranscript(dir * wheelStep)
-      }
-
-      precision.active = false
-
       // 0 = direction-flip bounce deferred; skip the no-op scroll.
-      const rows = computeWheelStep(wheelAccelRef.current, dir, now)
+      const rows = computeWheelStep(wheelAccelRef.current, dir, Date.now())
 
       return rows ? scrollTranscript(dir * rows * wheelStep) : undefined
     }
@@ -348,17 +307,9 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
       return scrollTranscript(key.pageUp ? -step : step)
     }
 
-    // Escape-based voice bindings (ctrl/alt/super+escape) must win before the
-    // generic Esc handlers below; otherwise queue-edit cancel / selection-clear
-    // would swallow the chord and /voice would advertise a shortcut that never
-    // actually toggles recording in those UI states.
-    if (key.escape && isVoiceToggleKey(key, ch, voice.recordKey)) {
-      return voiceRecordToggle()
-    }
-
-    // Queue-edit cancel beats selection-clear for plain Esc: the queue header
-    // explicitly promises "Esc cancel", so honoring it takes priority over the
-    // implicit selection-dismissal convention. Without an active edit, fall through.
+    // Queue-edit cancel beats selection-clear: the queue header explicitly
+    // promises "Esc cancel", so honoring it takes priority over the implicit
+    // selection-dismissal convention. Without an active edit, fall through.
     if (key.escape && cState.queueEditIdx !== null) {
       return cActions.clearIn()
     }
@@ -415,7 +366,6 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
 
     if (isCtrl(key, ch, 'x') && cState.queueEditIdx !== null) {
       cActions.removeQueue(cState.queueEditIdx)
-
       return cActions.clearIn()
     }
 
@@ -443,11 +393,10 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
     if (isAction(key, ch, 'l')) {
       clearSelection()
       forceRedraw(terminal.stdout ?? process.stdout)
-
       return
     }
 
-    if (isVoiceToggleKey(key, ch, voice.recordKey)) {
+    if (isVoiceToggleKey(key, ch)) {
       return voiceRecordToggle()
     }
 

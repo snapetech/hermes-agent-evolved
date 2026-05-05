@@ -8,10 +8,12 @@ effects (terminal, send_message, delegate_task, etc.).
 import threading
 from unittest.mock import patch
 
+from run_agent import AIAgent
 
-def _make_agent_stub(agent_cls):
+
+def _make_agent_stub():
     """Create a minimal AIAgent-like object with just enough state for _spawn_background_review."""
-    agent = object.__new__(agent_cls)
+    agent = object.__new__(AIAgent)
     agent.model = "test-model"
     agent.platform = "test"
     agent.provider = "openai"
@@ -43,16 +45,14 @@ class _SyncThread:
 
 def test_background_review_agent_uses_restricted_toolsets():
     """The review agent must only have access to 'memory' and 'skills' toolsets."""
-    import run_agent
-
-    agent = _make_agent_stub(run_agent.AIAgent)
+    agent = _make_agent_stub()
     captured = {}
 
     def _capture_init(self, *args, **kwargs):
         captured["enabled_toolsets"] = kwargs.get("enabled_toolsets")
         raise RuntimeError("stop after capturing init args")
 
-    with patch.object(run_agent.AIAgent, "__init__", _capture_init), \
+    with patch.object(AIAgent, "__init__", _capture_init), \
          patch("threading.Thread", _SyncThread):
         agent._spawn_background_review(
             messages_snapshot=[],

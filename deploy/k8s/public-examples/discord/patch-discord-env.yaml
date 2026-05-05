@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hermes-gateway
+  namespace: hermes
+spec:
+  template:
+    spec:
+      containers:
+        - name: gateway
+          env:
+            - name: DISCORD_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-discord
+                  key: DISCORD_BOT_TOKEN
+            - name: DISCORD_MESSAGE_CONTENT_INTENT
+              value: "true"
+            - name: DISCORD_ALLOWED_USERS
+              value: "<discord-user-id>"
+            - name: DISCORD_ALLOWED_CHANNELS
+              value: "<discord-channel-id>"
+            - name: DISCORD_HOME_CHANNEL
+              value: "<discord-channel-id>"
+            - name: DISCORD_HOME_CHANNEL_NAME
+              value: hermes
+            - name: DISCORD_FREE_RESPONSE_CHANNELS
+              value: "<discord-channel-id>"
+            - name: DISCORD_NO_THREAD_CHANNELS
+              value: "<discord-channel-id>"
+            - name: DISCORD_AUTO_THREAD
+              value: "false"
+

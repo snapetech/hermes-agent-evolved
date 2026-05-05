@@ -1,0 +1,7 @@
+name: runtime-control
+version: 0.1.0
+description: Operational control-plane commands, policy hooks, and durable decision notes.
+author: Keith Stack
+provides_hooks:
+  - pre_tool_call
+  - pre_llm_call

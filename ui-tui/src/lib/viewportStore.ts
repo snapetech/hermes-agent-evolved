@@ -28,18 +28,11 @@ export function getViewportSnapshot(s?: ScrollBoxHandle | null): ViewportSnapsho
   const pending = s.getPendingDelta()
   const top = Math.max(0, s.getScrollTop() + pending)
   const viewportHeight = Math.max(0, s.getViewportHeight())
-  const cachedScrollHeight = Math.max(viewportHeight, s.getScrollHeight())
-  let scrollHeight = cachedScrollHeight
+  const scrollHeight = Math.max(viewportHeight, s.getScrollHeight())
   const bottom = top + viewportHeight
-  let atBottom = s.isSticky() || bottom >= scrollHeight - 2
-
-  if (!atBottom) {
-    scrollHeight = Math.max(viewportHeight, s.getFreshScrollHeight?.() ?? cachedScrollHeight)
-    atBottom = s.isSticky() || bottom >= scrollHeight - 2
-  }
 
   return {
-    atBottom,
+    atBottom: s.isSticky() || bottom >= scrollHeight - 2,
     bottom,
     pending,
     scrollHeight,
